@@ -1,0 +1,367 @@
+---
+title: "Time course single cell RNA sequencing captures NEP lineage decision in vivo"
+output: html_document
+date: '2024-02-25'
+---
+
+The following script was made written by Jens Bager Christensen (jbc53@cam.ac.uk) in relation to the publication Christensen et al., 2025. 
+
+Loading required packages
+```{r, r echo=FALSE, results='hide', message = FALSE}
+library(Seurat)
+library(SeuratDisk)
+library(dplyr)
+library(ggplot2)
+library(biomaRt)
+library(Matrix)
+```
+
+defining functions used throughout the script.
+```{r}
+#set seed for consistency
+set.seed(1234)
+
+#function converting gene IDs to gene names
+n2e <- function(obj, ids) {
+  name_list = c()
+  for (x in ids){
+    name_list = append(name_list, row.names(subset(obj@assays$RNA[[]], 
+                                                   obj@assays$RNA[[]]$gene_name == x)))
+  } 
+  return(name_list)
+}
+
+
+#Defining parameters to test different resolutions for clustering
+res.range <- c(seq(0.1,2,0.05))
+assay <- "SCT"
+dims <- 30
+reduction <- "pca"
+
+#Defining a function, which clusters a RDS in a range of resolutions, and calculates both the silhouette score and the negative silhouette proportion to determine which resolution is optimal
+clusteringKit <- function(name, assay, dim, res.range, reduction){
+  DefaultAssay(name) <- assay
+  #using FindNeighbors (Seurat), a KNN based clustering algorithm, to compute a SNN graph, which then can be used to cluster the cells w. their neighbors
+  name <- FindNeighbors(name, dims=1:dim, reduction=reduction)
+  for (i in res.range){
+    #FindClusters is used to cluster the aforementioned SNN graph by optimising the modularity function. This is carried out for all resolutions in the range of interest.
+    name <- FindClusters(name, resolution=i)
+  }
+DefaultAssay(name) <- assay
+  dist.matrix <- dist(x = Embeddings(object = name[[reduction]])[, 1:dim])
+ clusters <- paste0(assay,"_snn_res.", res.range)
+  getSil <- function(clr) {
+    clr <- name@meta.data[[clr]]
+    sil <- cluster::silhouette(x = as.numeric(x = as.factor(x = clr)), dist = dist.matrix)
+    sil_value <- sil
+    return(sil_value)
+  }
+  
+  sls <- lapply(clusters, getSil) #mc.cores = 1)
+  sls_median <- sapply(sls, function(x) median(x[,3])) %>% setNames(., res.range)
+  sls_neg_prop <- sapply(sls, function(x) sum(x[,3]<0)/length(x[,3])) %>% setNames(., res.range)
+  p_list <- lapply(res.range, function(res){
+    #Idents(name) = name@meta.data[paste0(assay, "_snn_res.",res)]
+    DimPlot(name, reduction = "umap", label = TRUE, group.by = paste0(assay, "_snn_res.",res), pt.size =0.3, raster=F)
+  })
+  return(list(name=name, sls_median=sls_median, sls_neg_prop=sls_neg_prop, dimplots=p_list))
+}
+```
+
+Load in the data from all cells. This analysis was performed in relation to the previous publication Paluka et al., 2024 (DOI: 10.1101/2024.10.14.618368).
+```{r}
+#load in data from all cells
+adata <- read_rds("/mnt/beegfs6/home3/bayin/jbc53/scRNA-seq_2023/data/rds/all_cells.rds")
+
+#look at dimplots grouped by different meta data variables
+DimPlot(adata, group.by = "annotations", label = F, label.box = T, repel = T) & NoAxes()
+DimPlot(adata, group.by = "treatment") & NoAxes()
+DimPlot(adata, group.by = "timepoint") & NoAxes()
+DimPlot(adata, group.by = "Phase") & NoAxes()
+
+
+#subset all the cells from Pre and nonIR for further analysis of normal developmental lineages
+#set idents to annotations for easy subsetting
+Idents(adata) <- adata@meta.data$treatment
+
+#subset the data to include all cell that are from non-iradiated mice (Pre or nonIR)
+nonIR_adata <- subset(adata, idents = c("Pre", "nonIR"))
+
+#split the two objects allowing for reintegration
+nonIR_adata_list <- SplitObject(nonIR_adata, split.by = "orig.ident")
+
+#Re-integrate datasets. Skipping NormalizeData() and FindVariableFeatures(), and directly run from ScaleData() according to https://github.com/satijalab/seurat/issues/4228
+nonIR_adata_list <- lapply(X = nonIR_adata_list, FUN = function(x) {
+  x <- ScaleData(x)})
+
+#select features that are repeatedly variable across datasets for integration
+features.nonIR_adata <- SelectIntegrationFeatures(object.list = nonIR_adata_list)
+nonIR_adata_list <- PrepSCTIntegration(object.list = nonIR_adata_list, anchor.features = features.nonIR_adata)
+rna.anchors.nonIR_adata <- FindIntegrationAnchors(object.list = nonIR_adata_list, anchor.features = features.nonIR_adata)
+
+#this command creates an 'integrated' data assay
+nonIR_adata <- IntegrateData(anchorset = rna.anchors.nonIR_adata)
+
+#regress on cell cycle (CC.Difference), mitrochondrial -, gene reads, and sequencing depth
+nonIR_adata <- SCTransform(nonIR_adata, vars.to.regress = c("percent.mt", "CC.Difference", "nFeature_RNA", "nCount_RNA"))
+
+#run PCA and UMAP w. parameters previously used
+nonIR_adata <- RunPCA(nonIR_adata, features = nonIR_adata@assays$integrated@var.features, npcs = 100)
+nonIR_adata <- RunUMAP(nonIR_adata, dims = 1:40, n.neighbours = 30L, seed.use = 888, repulsion.strength = 0.1, min.dist = 0.5, n.epochs = NULL)
+
+#Visualise the data w. previous annotations and meta data variables
+DimPlot(nonIR_adata, group.by = "annotations", label = T, label.box = T, repel = T) & NoLegend() & NoAxes()
+DimPlot(nonIR_adata, group.by = "treatment") & NoAxes()
+DimPlot(nonIR_adata, group.by = "timepoint") & NoAxes()
+DimPlot(nonIR_adata, group.by = "Phase") & NoAxes()
+
+
+#re-performing the clustering
+#Recluster the data using Yuan's clustering kit to get a resolution, where only the Hopx-like astrocytes can be subsetted
+nonIR_adata <- clusteringKit(nonIR_adata, assay="SCT", dim=30, res.range=seq(0.1, 3, 0.1), reduction="pca")
+
+#plot to find the higest silhouette score w. low negative silhouette proportion
+plot(nonIR_adata$sls_median~seq(0.1,3,0.1), type = "l", ylab = "Silhouette score") & plot(nonIR_adata$sls_neg_prop~seq(0.1,3,0.1), type = "l", ylab = "Negative silhouette proportion score")
+#0.4 is initially deemed the optimal resolution.
+
+#rename the Seurat object
+nonIR_adata <- nonIR_adata$name
+
+#Plot with the new resolutions and compare to the previous annotations
+DimPlot(nonIR_adata, label = T, label.box = T, repel = T, group.by = "SCT_snn_res.0.4") + ggtitle("Non-injured cells w. new clustering") & NoLegend() & NoAxes()
+DimPlot(nonIR_adata, label = T, label.box = T, repel = T, group.by = "annotations") + ggtitle("Non-injured cells w. old annotations") & NoLegend() & NoAxes()
+
+#calculate marker genes for the clusters by setting the assay to SCT and the idents to the clustering computed with the optimal resolution.
+#PrepSCTFindMarkers is performed as per the Seurat vignette (https://satijalab.org/seurat/archive/v4.3/sctransform_v2_vignette).
+DefaultAssay(nonIR_adata) <- 'SCT'
+Idents(nonIR_adata) <- "SCT_snn_res.0.4"
+nonIR_adata <- PrepSCTFindMarkers(nonIR_adata, assay = "SCT", verbose = TRUE)
+nonIR_adata_markers <- FindAllMarkers(nonIR_adata, only.pos = TRUE, min.pct = 0.10, logfc.threshold = 0.25, assay = "SCT")
+
+#add column with genes names instead of Ensembl IDs to the cluster analysis dataframe. This makes it easier to work with. 
+library(org.Mm.eg.db)
+nonIR_adata_markers <- nonIR_adata_markers %>% transform(gene_ID = mapIds(org.Mm.eg.db, nonIR_adata_markers$gene, keytype="ENSEMBL", column="SYMBOL", multiVals = "first"))
+
+
+#list of annotations
+nonIR_annotations <- c("Hopx_NEPs_1", "Ascl1_NEPs", "GCPs_1", "Immature_interneurons", "Astrocytes", "GCPs_2", "Hopx_NEPs_2","Ependyma", "Posterior_GCPs", "Mesenchym", "Oligodendrocytes", "Microglia")
+
+#0 Hopx_NEPs_1 (Hopx+/Gdf10+)
+#1 Ascl1_NEPs (Ascl1+/Ptf1a+)
+#2 GCP_1 (Barhl1+/Atoh1/Rbfox3)
+#3 Immature_interneruons (Pax2+/Tubb3+)
+#4 Astrocytes (Slc6a11+)
+#5 GCP_2 (Barhl1+/Atoh1/Rbfox3)
+#6 Hopx_NEPs_2 (Hopx+/Gdf10+) (G2M/S)
+#7 Ependyma (Foxj1+)
+#8 Posterior_GCPs (Atoh1+/Barhl1+/Otx2+)
+#9 Mesenchym/fibroblast_like (Vtn+/Dcn+)
+#10 Oligodendrocytes (Olig2+/Gpr17+/Pdgfra+) (Sox10?)
+#11 Microglia (Ly68+/Cx3cr1+)
+
+#marker genes
+genes  <-  c("Hopx", "Gdf10", "Ascl1", "Atoh1", "Igfbp5", "Pax2", "Slc6a11", "Rbfox3", "Foxj1", "Vtn", "Dcn", "Olig2", "Pdgfra", "Cx3cr1", "Mki67")
+
+#plotting marker genes
+DotPlot(adata, features = n2e(adata, genes), group.by = "SCT_snn_res.0.4") + scale_x_discrete(breaks = genes, labels = genes_names) + xlab(label = "Marker genes") + ylab(label = "Cluster") + theme(axis.text.x = element_text(angle = 45)) + theme(axis.text.x = element_text(hjust = 1))
+
+#add annotations to the meta data
+nonIR_adata@meta.data <- nonIR_adata@meta.data %>%
+  transform(nonIR_annotations = case_when(
+    SCT_snn_res.0.4 == 0 ~ nonIR_annotations[1],
+    SCT_snn_res.0.4 == 1 ~ nonIR_annotations[2],
+    SCT_snn_res.0.4 == 2 ~ nonIR_annotations[3],
+    SCT_snn_res.0.4 == 3 ~ nonIR_annotations[4],
+    SCT_snn_res.0.4 == 4 ~ nonIR_annotations[5],
+    SCT_snn_res.0.4 == 5 ~ nonIR_annotations[6],
+    SCT_snn_res.0.4 == 6 ~ nonIR_annotations[7],
+    SCT_snn_res.0.4 == 7 ~ nonIR_annotations[8],
+    SCT_snn_res.0.4 == 8 ~ nonIR_annotations[9],
+    SCT_snn_res.0.4 == 9 ~ nonIR_annotations[10],
+    SCT_snn_res.0.4 == 10 ~ nonIR_annotations[11],
+    SCT_snn_res.0.4 == 11 ~ nonIR_annotations[12]
+    ))
+
+#view the data with the new annotations
+DimPlot(nonIR_adata, group.by = "nonIR_annotations") + ggtitle("Non-injured cells w. new clustering and new annotations") & NoAxes()
+```
+
+To increase the signal-to-noise ratio in the population of interest a biological informed iterative subsetting approach was used. Initially, all cells from the ventricular zone lineages were subsetted.
+```{r}
+#set idents to annotations for convinience
+Idents(nonIR_adata) <- nonIR_adata@meta.data$nonIR_annotations
+
+#subset the data including all ventricular zone cell 
+VZ_cells <- subset(nonIR_adata, idents = c("Astrocytes", "Hopx_NEPs_1", "Hopx_NEPs_2", "Ascl1_NEPs", "Immature_interneurons"))
+
+#split the two objects allowing for reintegration
+VZ_cells_list <- SplitObject(VZ_cells, split.by = "orig.ident")
+
+#Re-integrate datasets. Skipping NormalizeData() and FindVariableFeatures(), and directly run from ScaleData() according to https://github.com/satijalab/seurat/issues/4228
+VZ_cells_list <- lapply(X = VZ_cells_list, FUN = function(x) {
+  x <- ScaleData(x)})
+
+#select features that are repeatedly variable across datasets for integration
+features.VZ_cells <- SelectIntegrationFeatures(object.list = VZ_cells_list)
+VZ_cells_list <- PrepSCTIntegration(object.list = VZ_cells_list, anchor.features = features.VZ_cells)
+rna.anchors.VZ_cells <- FindIntegrationAnchors(object.list = VZ_cells_list, anchor.features = features.VZ_cells)
+
+#this command creates an 'integrated' data assay
+VZ_cells <- IntegrateData(anchorset = rna.anchors.VZ_cells)
+
+#regress on cell cylce (CC), mitrochondrial -, gene reads, and sequencing depth
+VZ_cells <- SCTransform(VZ_cells, vars.to.regress = c("percent.mt", "CC.Difference", "nFeature_RNA", "nCount_RNA"))
+
+#run PCA and UMAP w. parameters previously used
+VZ_cells <- RunPCA(VZ_cells, features = VZ_cells@assays$integrated@var.features, npcs = 100)
+VZ_cells <- RunUMAP(VZ_cells, dims = 1:40, n.neighbours = 30L, seed.use = 888, repulsion.strength = 0.1, min.dist = 0.5, n.epochs = NULL)
+
+#Visualise the data w. previous annotations
+DimPlot(VZ_cells, label = T, label.box = T, repel = T) & NoLegend() & NoAxes()
+
+#Recluster the data at various resolutions
+VZ_cells <- clusteringKit(VZ_cells, assay="SCT", dim=30, res.range=seq(0.1, 3, 0.1), reduction="pca")
+
+#plot to find the highest silhouette score w. low negative silhouette proportion
+plot(VZ_cells$sls_median~seq(0.1,3,0.1), type = "l", ylab = "Silhouette score") & plot(VZ_cells$sls_neg_prop~seq(0.1,3,0.1), type = "l", ylab = "Negative silhouette proportion score")
+#Based on the silhouette score and evaluating the expression of marker genes, a resolution of 0.9 was determined as optimal.
+
+#rename the Seurat object
+VZ_cells <- VZ_cells$name
+
+#Plot with the new resolutions and compare to the previous annotations
+DimPlot(VZ_cells, label = T, label.box = T, repel = T, group.by = "SCT_snn_res.0.9") + ggtitle("Non-injury VZ derived cells w. new clustering") & NoLegend() & NoAxes()
+DimPlot(VZ_cells, label = T, label.box = T, repel = T, group.by = "nonIR_annotations") + ggtitle("Non-injury VZ derived cells w. old annotations") & NoLegend() & NoAxes()
+
+#Plot with meta data variables
+DimPlot(VZ_cells, group.by = "treatment") + ggtitle("Non-injury VZ derived cells by treatment") & NoAxes()
+DimPlot(VZ_cells, group.by = "timepoint") + ggtitle("Non-injury VZ derived cells by timepoint") & NoAxes()
+DimPlot(VZ_cells, group.by = "Phase") + ggtitle("Non-injury VZ derived cells by CC phase") & NoAxes()
+
+#calculate marker genes for the clusters as previously described
+DefaultAssay(VZ_cells) <- 'SCT'
+Idents(VZ_cells) <- "SCT_snn_res.0.9"
+VZ_cells <- PrepSCTFindMarkers(VZ_cells, assay = "SCT", verbose = TRUE)
+VZ_cells_markers <- FindAllMarkers(VZ_cells, only.pos = TRUE, min.pct = 0.10, logfc.threshold = 0.25, assay = "SCT")
+
+#add column with genes names instead of Ensembl IDs to the cluster analysis dataframe. This makes it easier to work with. 
+library(org.Mm.eg.db)
+VZ_cells_markers <- VZ_cells_markers %>% transform(gene_ID = mapIds(org.Mm.eg.db, VZ_cells_markers$gene, keytype="ENSEMBL", column="SYMBOL", multiVals = "first"))
+
+
+#annotating the data
+nonIR_VZ_annotations = c("Hopx_NEPs_1", "Hopx_NEPs_2", "Ascl1_NEPs_1", "CN_interneurons", "Hopx_NEPs_3", "Ascl1_NEPs_2", "Immature_interneurons_1", "Hopx_NEPs_4", "Bipotent_NEPs", "Immature_interneurons_2", "Astrocytes")
+
+#0 - Hopx_NEPs_1 (Gdf10+/Hopx+)
+#1 - Hopx_NEPs_2 (Hopx+) (a lot of P3?)
+#2 - Ascl1_NEPs_1 (Ptf1a+/Ascl1+)
+#3 - Hopx_NEPs_3 (Hopx+) (G2M)
+#4 - CN_interneurons (Pvalb+)
+#5 - Ascl1_NEPs_2 (Ptf1a+/Ascl1+)
+#6 - Immature_interneurons_1 (Pax2+/Gad1+/Gad2+)
+#7 - Hopx_NEPs_4 (Hopx+/Gdf10+) 
+#8 - Bipotent_NEPs (Crlf1+/Hopx+ (low)/Ascl1+)
+#9 - Immature_interneurons_2 (Pax2+/Gad1-/Gad2+)
+#10 - Astrocytes (Slc6a11+) 
+
+
+#add annotations to the meta data
+VZ_cells@meta.data <- VZ_cells@meta.data %>%
+  transform(nonIR_VZ_annotations = case_when(
+    SCT_snn_res.0.9 == 0 ~ nonIR_VZ_annotations[1],
+    SCT_snn_res.0.9 == 1 ~ nonIR_VZ_annotations[2],
+    SCT_snn_res.0.9 == 2 ~ nonIR_VZ_annotations[3],
+    SCT_snn_res.0.9 == 3 ~ nonIR_VZ_annotations[4],
+    SCT_snn_res.0.9 == 4 ~ nonIR_VZ_annotations[5],
+    SCT_snn_res.0.9 == 5 ~ nonIR_VZ_annotations[6],
+    SCT_snn_res.0.9 == 6 ~ nonIR_VZ_annotations[7],
+    SCT_snn_res.0.9 == 7 ~ nonIR_VZ_annotations[8],
+    SCT_snn_res.0.9 == 8 ~ nonIR_VZ_annotations[9],
+    SCT_snn_res.0.9 == 9 ~ nonIR_VZ_annotations[10],
+    SCT_snn_res.0.9 == 10 ~ nonIR_VZ_annotations[11]
+    ))
+
+
+
+#visualise with new annotaitons
+DimPlot(VZ_cells, label = F, label.box = T, repel = T, group.by = "nonIR_VZ_annotations") + ggtitle("Non-injury VZ derived cells w. VZ annotations") & NoAxes()
+```
+
+
+Again, cluster containing cells unrelated to our questions, only clusters containing NEPs from the white matter were subsetted.
+```{r}
+#set idents to annotations for convenience
+Idents(VZ_cells) <- VZ_cells@meta.data$nonIR_VZ_annotations
+
+#subset the data including all cell
+bifurcation_cells <- subset(VZ_cells, idents = c("Bipotent_NEPs", "Astrocytes", "Ascl1_NEPs_1", "Ascl1_NEPs_2", "Immature_interneurons_1", "Immature_interneurons_2"))
+
+#split the two objects allowing for reintegration
+WM_cells_list <- SplitObject(WM_cells, split.by = "orig.ident")
+
+#Re-integrate datasets. Skipping NormalizeData() and FindVariableFeatures(), and directly run from ScaleData() according to https://github.com/satijalab/seurat/issues/4228
+WM_cells_list <- lapply(X = WM_cells_list, FUN = function(x) {
+  x <- ScaleData(x)})
+
+#select features that are repeatedly variable across datasets for integration
+features.WM_cells <- SelectIntegrationFeatures(object.list = WM_cells_list)
+WM_cells_list <- PrepSCTIntegration(object.list = WM_cells_list, anchor.features = features.WM_cells)
+rna.anchors.WM_cells <- FindIntegrationAnchors(object.list = WM_cells_list, anchor.features = features.WM_cells)
+
+#this command creates an 'integrated' data assay
+WM_cells <- IntegrateData(anchorset = rna.anchors.WM_cells)
+
+#regress on CC, mitrochondrial -, gene reads, and sequencing depth
+WM_cells <- SCTransform(WM_cells, vars.to.regress = c("percent.mt", "CC.Difference", "nFeature_RNA", "nCount_RNA"))
+
+#run PCA and UMAP w. parameters previously used
+WM_cells <- RunPCA(WM_cells, features = WM_cells@assays$integrated@var.features, npcs = 100)
+WM_cells <- RunUMAP(WM_cells, dims = 1:40, n.neighbours = 30L, seed.use = 888, repulsion.strength = 0.1, min.dist = 0.5, n.epochs = NULL)
+
+#Visualise the data w. previous annotations
+DimPlot(WM_cells, label = T, label.box = T, repel = T) & NoLegend() & NoAxes()
+
+#Recluster the data at various resolutions
+WM_cells <- clusteringKit(WM_cells, assay="SCT", dim=30, res.range=seq(0.1, 3, 0.1), reduction="pca")
+
+#plot to find the higest silhouette score w. low negative silhouette proportion
+plot(WM_cells$sls_median~seq(0.1,3,0.1), type = "l", ylab = "Silhouette score") & plot(WM_cells$sls_neg_prop~seq(0.1,3,0.1), type = "l", ylab = "Negative silhouette proportion score")
+#seemingly 0.4-0.7 is okay based on shilhouette scores. Looking at the DimPlots, 0.6 is chosen initially.
+
+
+#rename the Seurat objects
+WM_cells <- WM_cells$name
+
+#Plot with the new resolutions and compare to the previous annotations
+DimPlot(WM_cells, label = T, label.box = T, repel = T, group.by = "SCT_snn_res.0.6") + ggtitle("Non-injured WM cells w. new clustering") & NoLegend() & NoAxes()
+DimPlot(WM_cells, label = T, label.box = T, repel = T, group.by = "nonIR_VZ_annotations") + ggtitle("Non-injured WM cells w. old annotations") & NoLegend() & NoAxes()
+
+#Plot with meta data variables
+DimPlot(WM_cells, group.by = "treatment") + ggtitle("Non-injured WM cells by treatment") & NoAxes()
+DimPlot(WM_cells, group.by = "timepoint") + ggtitle("Non-injured WM cells by timepoint") & NoAxes()
+DimPlot(WM_cells, group.by = "Phase") + ggtitle("Non-injured WM cells by CC phase") & NoAxes()
+
+#calculate marker genes for the clusters as previously described
+DefaultAssay(WM_cells) <- 'SCT'
+WM_cells <- PrepSCTFindMarkers(WM_cells, assay = "SCT", verbose = TRUE)
+Idents(WM_cells) <- "SCT_snn_res.0.6"
+WM_cells_markers <- FindAllMarkers(WM_cells, only.pos = TRUE, min.pct = 0.10, logfc.threshold = 0.25)
+
+#add column with genes names instead of Ensembl IDs
+WM_cells_markers <- WM_cells_markers %>% transform(gene_ID = mapIds(org.Mm.eg.db, WM_cells_markers$gene, keytype="ENSEMBL", column="SYMBOL", multiVals = "first"))
+```
+
+Save the data as a h5ad so it can be used for scVelo and pySCENIC
+```{r}
+#work around to add spliced and unspliced to the AnnData object according to https://github.com/mojaveazure/seurat-disk/issues/21
+WM_cells@assays$RNA@scale.data <- WM_cells@assays$spliced@scale.data
+
+#saving the gene names notated as gene symbols, which is required for pySCENIC
+#write_csv(as.data.frame(adata@assays$RNA[[]]$gene_name), file = "./data/WM_features_gene_symbols.txt")
+
+#saving the subsetted data in a manner compatible with scVelo and pySCENIC
+DefaultAssay(WM_cells) <- "RNA"
+SaveH5Seurat(WM_cells, filename = "/mnt/beegfs6/home3/bayin/jbc53/scRNA-seq_2023/Christensen_et_al_2024/data/h5ad/nonIR_bifurcation_NEPs")
+Convert("/mnt/beegfs6/home3/bayin/jbc53/scRNA-seq_2023/Christensen_et_al_2024/data/h5ad/nonIR_bifurcation_NEPs.h5seurat", dest = "h5ad")
+#Ready for scVelo and pySCENIC in Python!
+```
