@@ -1,0 +1,423 @@
+---
+title: "Untitled"
+output: html_document
+date: '2024-08-16'
+---
+
+This script is used to analyse targeted DamID data collected by Jens Bager Christensen (jbc53@cam.ac.uk) in collaboration with Alex Donovan. The analyses seek to investigate the difference in ASCL1 and FOXO1 binding during NEP differentiation. 
+
+The following conditions were sequenced : ASCL1-Dam binding at day 2 and day 6 ; FOXO1-Dam binding at day 2 and day 6. 
+
+
+We wish to investigate which genes ASCL1 and FOXO1 binds and possibly regulates at day 2 and day 6 of differentiation. 
+Initially, we look at day 2
+```{r}
+library(ChIPpeakAnno)
+#load the significant peaks called by Alex
+ASCL1_d2 <- toGRanges("data/significant_peaks/ASCL1_D2_5.mergePeak_no_header.bed", format = "BED", header = T, )
+FOXO1_d2 <- toGRanges("data/significant_peaks/FOXO1_D2_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#annotate
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature < 1000]
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature > -1000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d2<- ASCL1_d2[ASCL1_d2$distancetoFeature < 1000]
+ASCL1_d2 <- ASCL1_d2[ASCL1_d2$distancetoFeature > -1000]
+
+#unique features
+# Subset the GRanges object to include only the first occurrence of each unique feature
+FOXO1_d2_uni_feat <- FOXO1_d2[!duplicated(mcols(FOXO1_d2)$feature)]
+ASCL1_d2_uni_feat <- ASCL1_d2[!duplicated(mcols(ASCL1_d2)$feature)]
+
+library(ggvenn)
+#make a list of the genes to create a Venndiagram
+venn_list <- list(ASCL1_d2 = ASCL1_d2_uni_feat$feature, 
+     FOXO1_d2 = FOXO1_d2_uni_feat$feature)
+
+#plot
+ggvenn(venn_list, auto_scale = T, fill_alpha = 0.5)
+
+#find genes having a significant peak ± 1 kb from the TSS from ASCL1 day 2 and FOXO1 day 2
+shared_genes <- intersect(ASCL1_d2_uni_feat$feature, FOXO1_d2_uni_feat$feature)
+
+#make an output of all shared genes with ENSEMBL IDs
+write.csv(shared_genes, file = "output/day_2_shared_genes.csv")
+
+#find and output genes only have an ASCL1 peak ±1 from the TSS
+ASCL1_d2_only <- setdiff(ASCL1_d2_uni_feat$feature, FOXO1_d2_uni_feat$feature)
+
+write.csv(ASCL1_d2_only, file = "output/ASCL1_d2_no_FOXO1_d2_genes.csv")
+
+#find and output genes only have an FOXO1 peak ±1 from the TSS
+FOXO1_d2_only <- setdiff(FOXO1_d2_uni_feat$feature, ASCL1_d2_uni_feat$feature)
+
+write.csv(FOXO1_d2_only, file = "output/FOXO1_d2_no_ASCL1_d2_genes.csv")
+```
+
+Now do similar for ASCL1 binding at day 6 and FOXO1 binding at day 6
+```{r}
+library(ChIPpeakAnno)
+#load the significant peaks called by Alex
+ASCL1_d6 <- toGRanges("data/significant_peaks/ASCL1_D6_5.mergePeak_no_header.bed", format = "BED", header = T, )
+FOXO1_d6 <- toGRanges("data/significant_peaks/FOXO1_D6_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+
+#annotate
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature < 1000]
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature > -1000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d6<- ASCL1_d6[ASCL1_d6$distancetoFeature < 1000]
+ASCL1_d6 <- ASCL1_d6[ASCL1_d6$distancetoFeature > -1000]
+
+#unique features
+# Subset the GRanges object to include only the first occurrence of each unique feature
+FOXO1_d6_uni_feat <- FOXO1_d6[!duplicated(mcols(FOXO1_d6)$feature)]
+ASCL1_d6_uni_feat <- ASCL1_d6[!duplicated(mcols(ASCL1_d6)$feature)]
+
+
+#make a list of the genes to create a Venndiagram
+venn_list_d6 <- list(ASCL1_d6 = ASCL1_d6_uni_feat$feature, 
+     FOXO1_d6 = FOXO1_d6_uni_feat$feature)
+
+#plot
+ggvenn(venn_list_d6, auto_scale = T, fill_alpha = 0.5)
+
+#find genes having a significant peak ± 1 kb from the TSS from ASCL1 day 2 and FOXO1 day 2
+shared_genes_d6 <- intersect(ASCL1_d6_uni_feat$feature, FOXO1_d6_uni_feat$feature)
+
+#make an output of all shared genes with ENSEMBL IDs
+write.csv(shared_genes_d6, file = "output/day_6_shared_genes.csv")
+
+#find and output genes only have an ASCL1 peak ±1 from the TSS at day 6
+ASCL1_d6_only <- setdiff(ASCL1_d6_uni_feat$feature, FOXO1_d6_uni_feat$feature)
+
+write.csv(ASCL1_d6_only, file = "output/ASCL1_d6_no_FOXO1_d6_genes.csv")
+
+#find and output genes only have an FOXO1 peak ±1 from the TSS at day 6
+FOXO1_d6_only <- setdiff(FOXO1_d6_uni_feat$feature, ASCL1_d6_uni_feat$feature)
+
+write.csv(FOXO1_d6_only, file = "output/FOXO1_d6_no_ASCL1_d6_genes.csv")
+```
+
+
+
+
+
+
+_Performing the analysis independently of the other transcription factor. Understanding what genes ASCL1 regulate at day 2, and what genes FOXO1 is regulating at day 6._
+Firstly, for ASCL1 day 2
+```{r}
+#load the significant peaks called by Alex
+ASCL1_d2 <- toGRanges("data/significant_peaks/ASCL1_D2_5.mergePeak_no_header.bed", format = "BED", header = T, )
+
+#annotate
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d2<- ASCL1_d2[ASCL1_d2$distancetoFeature < 1000]
+ASCL1_d2 <- ASCL1_d2[ASCL1_d2$distancetoFeature > -1000]
+
+write.csv(ASCL1_d2$feature, file = "output/ASCL1_day2_genes_1kb_TSS.csv")
+```
+
+Secondly, for FOXO1 day 2
+```{r}
+#load the significant peaks called by Alex
+FOXO1_d2 <- toGRanges("data/significant_peaks/FOXO1_D2_5.mergePeak_no_header.bed", format = "BED", header = T, )
+
+#annotate
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature < 1000]
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature > -1000]
+
+write.csv(FOXO1_d2$feature, file = "output/FOXO1_day2_genes_1kb_TSS.csv")
+```
+
+Thirdly, for ASCL1 day 6
+```{r}
+#load the significant peaks called by Alex
+ASCL1_d6 <- toGRanges("data/significant_peaks/ASCL1_D6_5.mergePeak_no_header.bed", format = "BED", header = T, )
+
+#annotate
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d6 <- ASCL1_d6[ASCL1_d6$distancetoFeature < 1000]
+ASCL1_d6 <- ASCL1_d6[ASCL1_d6$distancetoFeature > -1000]
+
+write.csv(ASCL1_d6$feature, file = "output/ASCL1_day6_genes_1kb_TSS.csv")
+```
+
+Fourthly, for FOXO1 day 2
+```{r}
+#load the significant peaks called by Alex
+FOXO1_d6 <- toGRanges("data/significant_peaks/FOXO1_D6_5.mergePeak_no_header.bed", format = "BED", header = T, )
+
+#annotate
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature < 1000]
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature > -1000]
+
+write.csv(FOXO1_d6$feature, file = "output/FOXO1_day6_genes_1kb_TSS.csv")
+```
+
+
+
+_Export binding regions in a format compatible with HOMER for ASCL1 and FOXO1 peaks at day 2 and 6._
+Firstly, for ASCL1 day 2
+```{r}
+#export as .bed files that can be used by HOMER
+ASCL1_d2 <- toGRanges("data/significant_peaks/ASCL1_D2_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+#for ASCL1
+ASCL1_d2_homer <- data.frame(chr=seqnames(ASCL1_d2),
+  start=start(ASCL1_d2)-1,
+  end=end(ASCL1_d2),
+  name=elementMetadata(ASCL1_d2)$feature,
+  strand=strand(ASCL1_d2))
+
+
+
+ASCL1_d2_homer <- ASCL1_d2_homer %>% transform(chr = paste0("chr", chr))
+
+ASCL1_d2_homer <- ASCL1_d2_homer %>% transform(ID = 1:length(ASCL1_d2_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(ASCL1_d2_homer, file="homer/data/ASCL1_peaks_d2_1KB_TSS.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+
+Secondly, for ASCL1 day 6
+```{r}
+#export as .bed files that can be used by HOMER
+ASCL1_d6 <- toGRanges("data/significant_peaks/ASCL1_D6_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes, FeatureLocForDistance = "TSS")
+#for ASCL1
+ASCL1_d6_homer <- data.frame(chr=seqnames(ASCL1_d6),
+  start=start(ASCL1_d6)-1,
+  end=end(ASCL1_d6),
+  name=elementMetadata(ASCL1_d6)$feature,
+  strand=strand(ASCL1_d6))
+
+
+
+ASCL1_d6_homer <- ASCL1_d6_homer %>% transform(chr = paste0("chr", chr))
+
+ASCL1_d6_homer <- ASCL1_d6_homer %>% transform(ID = 1:length(ASCL1_d6_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(ASCL1_d6_homer, file="homer/data/ASCL1_peaks_d6_1KB_TSS.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+
+Thiredly, for FOXO1 day 6
+```{r}
+FOXO1_d6 <- toGRanges("data/significant_peaks/FOXO1_D6_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#export as .bed files that can be used by HOMER
+#for ASCL1
+FOXO1_d6_homer <- data.frame(chr=seqnames(FOXO1_d6),
+  start=start(FOXO1_d6)-1,
+  end=end(FOXO1_d6),
+  name=elementMetadata(FOXO1_d6)$feature,
+  strand=strand(FOXO1_d6))
+
+
+
+FOXO1_d6_homer <- FOXO1_d6_homer %>% transform(chr = paste0("chr", chr))
+
+FOXO1_d6_homer <- FOXO1_d6_homer %>% transform(ID = 1:length(FOXO1_d6_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(FOXO1_d6_homer, file="homer/data/FOXO1_peaks_d6_1KB_TSS.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+
+Fourthly, for FOXO1 day 2
+```{r}
+#export as .bed files that can be used by HOMER
+FOXO1_d2 <- toGRanges("data/significant_peaks/FOXO1_D2_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#for ASCL1
+FOXO1_d2_homer <- data.frame(chr=seqnames(FOXO1_d2),
+  start=start(FOXO1_d2)-1,
+  end=end(FOXO1_d2),
+  name=elementMetadata(FOXO1_d2)$feature,
+  strand=strand(FOXO1_d2))
+
+
+FOXO1_d2_homer <- FOXO1_d2_homer %>% transform(chr = paste0("chr", chr))
+
+FOXO1_d2_homer <- FOXO1_d2_homer %>% transform(ID = 1:length(FOXO1_d2_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(FOXO1_d2_homer, file="homer/data/FOXO1_peaks_d2_1KB_TSS.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+
+
+_Investigating the distance between ASCL1-Dam and FOXO1-Dam peaks at co-bound genes_
+```{r}
+library(ChIPpeakAnno)
+#load the significant peaks called by Alex
+ASCL1_d2 <- toGRanges("data/significant_peaks/ASCL1_D2_5.mergePeak_no_header.bed", format = "BED", header = T, )
+FOXO1_d2 <- toGRanges("data/significant_peaks/FOXO1_D2_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#annotate
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature < 1000]
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature > -1000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d2<- ASCL1_d2[ASCL1_d2$distancetoFeature < 1000]
+ASCL1_d2 <- ASCL1_d2[ASCL1_d2$distancetoFeature > -1000]
+
+
+#find genes having a significant peak ± 1 kb from the TSS from ASCL1 day 2 and FOXO1 day 6
+shared_genes <- intersect(ASCL1_d2$feature, FOXO1_d2$feature)
+
+#subset the GRange object to contain only the shared genes
+FOXO1_d2_shared <- FOXO1_d2[FOXO1_d2$feature %in% shared_genes]
+ASCL1_d2_shared <- ASCL1_d2[ASCL1_d2$feature %in% shared_genes]
+
+# Load necessary package
+library(GenomicRanges)
+
+# Step 1: Compute the midpoints of peaks
+midpoint <- function(gr) resize(gr, width = 1, fix = "center")
+
+ASCL1_d2_shared_mid <- midpoint(ASCL1_d2_shared)
+FOXO1_d2_shared_mid <- midpoint(FOXO1_d2_shared)
+
+# Step 2: Split GRanges objects by 'feature' (gene name)
+ASCL1_split <- split(ASCL1_d2_shared_mid, mcols(ASCL1_d2_shared_mid)$feature)
+FOXO1_split <- split(FOXO1_d2_shared_mid, mcols(FOXO1_d2_shared_mid)$feature)
+
+# Step 3: Get the shared genes between the two GRange objects
+shared_genes <- intersect(names(ASCL1_split), names(FOXO1_split))
+
+# Step 4: Calculate minimum absolute distances for shared genes
+min_distances <- sapply(shared_genes, function(gene) {
+  ascl1_ranges <- ASCL1_split[[gene]]
+  foxo1_ranges <- FOXO1_split[[gene]]
+  
+  # Compute pairwise distances (absolute value)
+  dist_matrix <- abs(outer(
+    start(ascl1_ranges) + width(ascl1_ranges) / 2,
+    start(foxo1_ranges) + width(foxo1_ranges) / 2,
+    `-`
+  ))
+  
+  # Find the minimum absolute distance
+  min(dist_matrix)
+})
+
+# Step 5: Create a data frame with results
+results <- data.frame(
+  gene = shared_genes,
+  dist = min_distances,
+  timepoint = "Day 2"
+)
+
+
+#load the significant peaks called by Alex
+ASCL1_d6 <- toGRanges("data/significant_peaks/ASCL1_D6_5.mergePeak_no_header.bed", format = "BED", header = T, )
+FOXO1_d6 <- toGRanges("data/significant_peaks/FOXO1_D6_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+#annotate
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature < 1000]
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature > -1000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d6<- ASCL1_d6[ASCL1_d6$distancetoFeature < 1000]
+ASCL1_d6 <- ASCL1_d6[ASCL1_d6$distancetoFeature > -1000]
+
+
+#find genes having a significant peak ± 1 kb from the TSS from ASCL1 day 2 and FOXO1 day 6
+shared_genes_d6 <- intersect(ASCL1_d6$feature, FOXO1_d6$feature)
+
+#subset the GRange object to contain only the shared genes
+FOXO1_d6_shared <- FOXO1_d6[FOXO1_d6$feature %in% shared_genes_d6]
+ASCL1_d6_shared <- ASCL1_d6[ASCL1_d6$feature %in% shared_genes_d6]
+
+ASCL1_d6_shared_mid <- midpoint(ASCL1_d6_shared)
+FOXO1_d6_shared_mid <- midpoint(FOXO1_d6_shared)
+
+# Step 2: Split GRanges objects by 'feature' (gene name)
+ASCL1_split_d6 <- split(ASCL1_d6_shared_mid, mcols(ASCL1_d6_shared_mid)$feature)
+FOXO1_split_d6 <- split(FOXO1_d6_shared_mid, mcols(FOXO1_d6_shared_mid)$feature)
+
+# Step 3: Get the shared genes between the two GRange objects
+shared_genes_d6 <- intersect(names(ASCL1_split_d6), names(FOXO1_split_d6))
+
+# Step 4: Calculate minimum absolute distances for shared genes
+min_distances_d6 <- sapply(shared_genes_d6, function(gene) {
+  ascl1_ranges_d6 <- ASCL1_split_d6[[gene]]
+  foxo1_ranges_d6 <- FOXO1_split_d6[[gene]]
+  
+  # Compute pairwise distances (absolute value)
+  dist_matrix_d6 <- abs(outer(
+    start(ascl1_ranges_d6) + width(ascl1_ranges_d6) / 2,
+    start(foxo1_ranges_d6) + width(foxo1_ranges_d6) / 2,
+    `-`
+  ))
+  
+  # Find the minimum absolute distance
+  min(dist_matrix_d6)
+})
+
+# Step 5: Create a data frame with results
+results_d6 <- data.frame(
+  gene = shared_genes_d6,
+  dist = min_distances_d6,
+  timepoint = "Day 6"
+)
+
+
+#merge the two dataframes
+cb_results <- rbind(results, results_d6)
+
+#visualise the data together
+ggplot(cb_results, aes(x=dist, fill = timepoint)) + geom_density(alpha = 0.5) +theme_bw()
+ggplot(cb_results, aes(x=log10(dist+0.00001), fill = timepoint)) + geom_density(alpha = 0.5) +theme_bw()
+```
