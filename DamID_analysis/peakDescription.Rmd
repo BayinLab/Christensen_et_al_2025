@@ -1,0 +1,179 @@
+---
+title: "Untitled"
+output: html_document
+date: '2025-06-17'
+---
+
+Load packages and libraries reqiured
+```{r}
+library(ChIPpeakAnno)
+library(tidyverse)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(GenomicRanges)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+```
+
+_Looking at which genomic regions the peaks occurs_
+```{r}
+#function for visualization from https://www.bioconductor.org/packages/release/bioc/vignettes/ChIPpeakAnno/inst/doc/ChIPpeakAnno.html
+rotate_x <- function(data, rot_angle) {
+  plt <- barplot(data, xaxt = "n")
+  text(plt, par("usr")[3], 
+       labels = names(data), 
+       srt = rot_angle, adj = c(1.1,1.1), 
+       xpd = TRUE, cex = 0.6)
+}
+
+#load the significant peaks called by Alex
+ASCL1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D2_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO_D2.5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+Dam_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/DAM_D2_5.reproPeak_no_header.bed", format = "BED", header = T)
+
+#annotate
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+Dam_d2 <- annotatePeakInBatch(Dam_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#assign in what chromosomal region the peaks reside
+ASCL1_chromosome_region <- assignChromosomeRegion(ASCL1_d2,
+                                            TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                                            nucleotideLevel = FALSE,
+                                            precedence=c("Promoters",
+                                                         "immediateDownstream", 
+                                                         "fiveUTRs", 
+                                                         "threeUTRs",
+                                                         "Exons", 
+                                                         "Introns"))
+
+FOXO1_chromosome_region <- assignChromosomeRegion(FOXO1_d2,
+                                            TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                                            nucleotideLevel = FALSE,
+                                            precedence=c("Promoters",
+                                                         "immediateDownstream", 
+                                                         "fiveUTRs", 
+                                                         "threeUTRs",
+                                                         "Exons", 
+                                                         "Introns"))
+
+Dam_chromosome_region <- assignChromosomeRegion(Dam_d2,
+                                            TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                                            nucleotideLevel = FALSE,
+                                            precedence=c("Promoters",
+                                                         "immediateDownstream", 
+                                                         "fiveUTRs", 
+                                                         "threeUTRs",
+                                                         "Exons", 
+                                                         "Introns"))
+
+
+plot_ASCL1 <- as_tibble(ASCL1_chromosome_region[["percentage"]]) %>% transform(ID = "ASCL1")
+plot_FOXO1 <- as_tibble(FOXO1_chromosome_region[["percentage"]]) %>% transform(ID = "FOXO1")
+plot_Dam <- as_tibble(Dam_chromosome_region[["percentage"]]) %>% transform(ID = "Dam-alone")
+
+plot_data <- rbind(plot_ASCL1, plot_FOXO1, plot_Dam)
+plot_data$ID <- factor(plot_data$ID, levels = c("Dam-alone", "ASCL1", "FOXO1"))
+
+ggplot(plot_data, aes(x=ID, y = n, group = subjectHits)) + geom_col(aes(fill = subjectHits)) + theme_bw() + ylab(label = "Percentage of peaks") + xlab(label = "Condition")
+```
+
+
+
+
+Similarly is done for peaks at day 6
+```{r}
+#load the significant peaks called by Alex
+ASCL1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+Dam_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/DAM_D6_5.reproPeak_no_header.bed", format = "BED", header = T)
+
+#annotate
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+Dam_d6 <- annotatePeakInBatch(Dam_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#assign in what chromosomal region the peaks reside
+ASCL1_chromosome_region <- assignChromosomeRegion(ASCL1_d6,
+                                            TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                                            nucleotideLevel = FALSE,
+                                            precedence=c("Promoters",
+                                                         "immediateDownstream", 
+                                                         "fiveUTRs", 
+                                                         "threeUTRs",
+                                                         "Exons", 
+                                                         "Introns"))
+
+FOXO1_chromosome_region <- assignChromosomeRegion(FOXO1_d6,
+                                            TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                                            nucleotideLevel = FALSE,
+                                            precedence=c("Promoters",
+                                                         "immediateDownstream", 
+                                                         "fiveUTRs", 
+                                                         "threeUTRs",
+                                                         "Exons", 
+                                                         "Introns"))
+
+Dam_chromosome_region <- assignChromosomeRegion(Dam_d6,
+                                            TxDb = TxDb.Mmusculus.UCSC.mm10.knownGene,
+                                            nucleotideLevel = FALSE,
+                                            precedence=c("Promoters",
+                                                         "immediateDownstream", 
+                                                         "fiveUTRs", 
+                                                         "threeUTRs",
+                                                         "Exons", 
+                                                         "Introns"))
+
+
+plot_ASCL1 <- as_tibble(ASCL1_chromosome_region[["percentage"]]) %>% transform(ID = "ASCL1")
+plot_FOXO1 <- as_tibble(FOXO1_chromosome_region[["percentage"]]) %>% transform(ID = "FOXO1")
+plot_Dam <- as_tibble(Dam_chromosome_region[["percentage"]]) %>% transform(ID = "Dam-alone")
+
+plot_data <- rbind(plot_ASCL1, plot_FOXO1, plot_Dam)
+plot_data$ID <- factor(plot_data$ID, levels = c("Dam-alone", "ASCL1", "FOXO1"))
+
+ggplot(plot_data, aes(x=ID, y = n, group = subjectHits)) + geom_col(aes(fill = subjectHits)) + theme_bw() + ylab(label = "Percentage of peaks") + xlab(label = "Condition")
+```
+
+
+Calculate descriptive statistics to report
+```{r}
+GRange_List <- list(Dam_d2, ASCL1_d2, FOXO1_d2, Dam_d6, ASCL1_d6, FOXO1_d6)
+
+# Assuming GRange_List is your list of GRanges objects
+summary_table <- lapply(seq_along(GRange_List), function(i) {
+  gr <- GRange_List[[i]]
+  
+  # Add peak width as a metadata column
+  peak_w <- width(gr)
+  mcols(gr)$peak_width <- peak_w
+  
+  # Naming each GRange
+  name_list <- c("Dam-alone day 2", "ASCL1-Dam day 2", "FOXO1-Dam day 2", "Dam-alone day 6", "ASCL1-Dam day 6", "FOXO1-Dam day 6")
+  # Summary statistics
+  tibble(
+    Sample = name_list[i],
+    Total_peaks = length(gr$peak),
+    Min_Width = min(peak_w),
+    Max_Width = max(peak_w),
+    Mean_Width = mean(peak_w),
+    Median_Width = median(peak_w)
+  )
+}) %>%
+  bind_rows()
+
+write_csv(summary_table, "DamID/ASCL1-FOXO1_DamID/revision/DamID_descriptive_statistics.csv")
+```
+

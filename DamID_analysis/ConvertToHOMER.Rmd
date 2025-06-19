@@ -1,0 +1,155 @@
+---
+title: "HOMER analysis of DamID data"
+output: html_document
+date: '2025-06-09'
+---
+
+This script is written by Jens Bager Christensen to convert GRange objects with DamID data into a format compatible with subsequent HOMER analysis.
+
+Load packages and libraries reqiured
+```{r}
+library(ChIPpeakAnno)
+library(tidyverse)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+```
+
+
+Firstly, it is done for the FOXO1-Dam peaks at day 2 and day 6
+```{r}
+#export as .bed files that can be used by HOMER
+
+  #day 2
+FOXO1_d2 <- toGRanges("mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/data/significant_peaks/FOXO1_D2_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#reformat
+FOXO1_d2_homer <- data.frame(chr=seqnames(FOXO1_d2),
+  start=start(FOXO1_d2)-1,
+  end=end(FOXO1_d2),
+  name=elementMetadata(FOXO1_d2)$feature,
+  strand=strand(FOXO1_d2))
+
+
+FOXO1_d2_homer <- FOXO1_d2_homer %>% transform(chr = paste0("chr", chr))
+
+FOXO1_d2_homer <- FOXO1_d2_homer %>% transform(ID = 1:length(FOXO1_d2_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(FOXO1_d2_homer, file="mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/homer/data/FOXO1_peaks_d2.bed", quote=F, sep="\t", row.names=F, col.names=F)
+
+  #day 6
+FOXO1_d6 <- toGRanges("mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/data/significant_peaks/FOXO1_D6_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#reformat
+FOXO1_d6_homer <- data.frame(chr=seqnames(FOXO1_d6),
+  start=start(FOXO1_d6)-1,
+  end=end(FOXO1_d6),
+  name=elementMetadata(FOXO1_d6)$feature,
+  strand=strand(FOXO1_d6))
+
+
+FOXO1_d6_homer <- FOXO1_d6_homer %>% transform(chr = paste0("chr", chr))
+
+FOXO1_d6_homer <- FOXO1_d6_homer %>% transform(ID = 1:length(FOXO1_d6_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(FOXO1_d6_homer, file="mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/homer/data/FOXO1_peaks_d6.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+
+Secondly for ASCL1-Dam peaks at day 2 and day 6
+```{r}
+#export as .bed files that can be used by HOMER
+
+  #day 2
+ASCL1_d2 <- toGRanges("mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/data/significant_peaks/ASCL1_D2_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#reformat
+ASCL1_d2_homer <- data.frame(chr=seqnames(ASCL1_d2),
+  start=start(ASCL1_d2)-1,
+  end=end(ASCL1_d2),
+  name=elementMetadata(ASCL1_d2)$feature,
+  strand=strand(ASCL1_d2))
+
+
+ASCL1_d2_homer <- ASCL1_d2_homer %>% transform(chr = paste0("chr", chr))
+
+ASCL1_d2_homer <- ASCL1_d2_homer %>% transform(ID = 1:length(ASCL1_d2_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(ASCL1_d2_homer, file="mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/homer/data/ASCL1_peaks_d2.bed", quote=F, sep="\t", row.names=F, col.names=F)
+
+  #day 6
+ASCL1_d6 <- toGRanges("mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/data/significant_peaks/ASCL1_D6_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#reformat
+ASCL1_d6_homer <- data.frame(chr=seqnames(ASCL1_d6),
+  start=start(ASCL1_d6)-1,
+  end=end(ASCL1_d6),
+  name=elementMetadata(ASCL1_d6)$feature,
+  strand=strand(ASCL1_d6))
+
+
+ASCL1_d6_homer <- ACSL1_d6_homer %>% transform(chr = paste0("chr", chr))
+
+ASCL1_d6_homer <- ASCL1_d6_homer %>% transform(ID = 1:length(ASCL1_d6_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(ASCL1_d6_homer, file="mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/homer/data/ASCL1_peaks_d6.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+
+Lastly, for Dam-only peaks at day 2 and day 6
+```{r}
+#export as .bed files that can be used by HOMER
+
+  #day 2
+Dam_only_d2 <- toGRanges("/mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/data/significant_peaks/Dam_D2_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+Dam_only_d2 <- annotatePeakInBatch(Dam_only_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#reformat
+Dam_only_d2_homer <- data.frame(chr=seqnames(Dam_only_d2),
+  start=start(Dam_only_d2)-1,
+  end=end(Dam_only_d2),
+  name=elementMetadata(Dam_only_d2)$feature,
+  strand=strand(Dam_only_d2))
+
+
+Dam_only_d2_homer <- Dam_only_d2_homer %>% transform(chr = paste0("chr", chr))
+
+Dam_only_d2_homer <- Dam_only_d2_homer %>% transform(ID = 1:length(Dam_only_d2_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(Dam_only_d2_homer, file="/mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/homer/data/Dam_only_peaks_d2.bed", quote=F, sep="\t", row.names=F, col.names=F)
+
+  #day 6
+Dam_only_d6 <- toGRanges("/mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/data/significant_peaks/Dam_D6_5.mergePeak_no_header.bed", format = "BED", header = T)
+
+Dam_only_d6 <- annotatePeakInBatch(Dam_only_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#reformat
+Dam_only_d6_homer <- data.frame(chr=seqnames(Dam_only_d6),
+  start=start(Dam_only_d6)-1,
+  end=end(Dam_only_d6),
+  name=elementMetadata(Dam_only_d6)$feature,
+  strand=strand(Dam_only_d6))
+
+
+Dam_only_d6_homer <- Dam_only_d6_homer %>% transform(chr = paste0("chr", chr))
+
+Dam_only_d6_homer <- Dam_only_d6_homer %>% transform(ID = 1:length(Dam_only_d6_homer$start)) %>% dplyr::select(c("chr", "start", "end", "ID", "name", "strand"))
+
+write.table(Dam_only_d6_homer, file="/mnt/home3/bayin/jbc53/DamID/In_vitro_NEP_DamID/homer/data/Dam_only_peaks_d6.bed", quote=F, sep="\t", row.names=F, col.names=F)
+```
+

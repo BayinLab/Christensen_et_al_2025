@@ -1,0 +1,243 @@
+---
+title: "Untitled"
+output: html_document
+date: '2025-04-29'
+---
+This script is used to analyse targeted DamID data collected by Jens Bager Christensen (jbc53@cam.ac.uk) in collaboration with Alex Donovan. The analyses seek to investigate the difference in ASCL1 and FOXO1 binding during NEP differentiation. 
+
+The following conditions were sequenced : ASCL1-Dam binding at day 2 and day 6 ; FOXO1-Dam binding at day 2 and day 6. 
+
+
+We wish to investigate which genes ASCL1 and FOXO1 binds and possibly regulates at day 2 and day 6 of differentiation. 
+Initially, we look at day 2
+
+```{r}
+library(ChIPpeakAnno)
+#load the significant peaks called by Alex
+ASCL1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D2_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO_D2.5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#use biomaRt to add gene symbols instead of ensembl IDs
+library(biomaRt)
+
+
+mart <- useMart(biomart="ENSEMBL_MART_ENSEMBL", 
+                dataset = "mmusculus_gene_ensembl", 
+                host = "https://www.ensembl.org/", verbose = F)
+
+#annotate
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature < 2000]
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature > -2000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d2<- ASCL1_d2[ASCL1_d2$distancetoFeature < 2000]
+ASCL1_d2 <- ASCL1_d2[ASCL1_d2$distancetoFeature > -2000]
+
+#unique features
+# Subset the GRanges object to include only the first occurrence of each unique feature
+FOXO1_d2_uni_feat <- FOXO1_d2[!duplicated(mcols(FOXO1_d2)$feature)]
+ASCL1_d2_uni_feat <- ASCL1_d2[!duplicated(mcols(ASCL1_d2)$feature)]
+
+library(ggvenn)
+#make a list of the genes to create a Venndiagram
+venn_list <- list(ASCL1_d2 = ASCL1_d2_uni_feat$feature, 
+     FOXO1_d2 = FOXO1_d2_uni_feat$feature)
+
+#plot
+ggvenn(venn_list, auto_scale = T, fill_alpha = 0.5)
+
+#find genes having a significant peak ± 1 kb from the TSS from ASCL1 day 2 and FOXO1 day 2
+shared_genes <- intersect(ASCL1_d2_uni_feat$feature, FOXO1_d2_uni_feat$feature)
+
+#make an output of all shared genes with ENSEMBL IDs
+#write.csv(shared_genes, file = "DamID_2kb/day_2_shared_genes_2kb.csv")
+
+#load GRange of genes from EnsDb
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#following table can be used to cross-reference ENSEMBL IDs to gene symbols
+annotTable <- getBM(
+  attributes = c(
+    'ensembl_gene_id',
+    'ensembl_transcript_id',
+    'mgi_symbol'),
+  mart = mart)
+
+#identify the row with the genes of interest
+row_boo <- annotTable$ensembl_gene_id %in% shared_genes
+
+#add it as a new column
+annotTable$row_boo <- row_boo
+
+#filter out only row_boo True columns and make a list of the ENSEMBL IDs of those genes
+short_list <- annotTable %>% dplyr::filter(row_boo == T)
+
+#call the ENSEMBL IDs as a lsit
+genes_oi <- short_list$mgi_symbol
+
+#make unique
+genes_oi <- unique(genes_oi)
+
+#write.csv(genes_oi, file = "DamID_2kb/ASCL1_d2_FOXO1_d2_2kb_genes.csv")
+
+#unique to ASCL1 day 2
+ASCL1_d2_only <- setdiff(ASCL1_d2_uni_feat$feature, FOXO1_d2_uni_feat$feature)
+
+#identify the row with the genes of interest
+row_boo <- annotTable$ensembl_gene_id %in% ASCL1_d2_only
+
+#add it as a new column
+annotTable$row_boo <- row_boo
+
+#filter out only row_boo True columns and make a list of the ENSEMBL IDs of those genes
+short_list <- annotTable %>% dplyr::filter(row_boo == T)
+
+#call the ENSEMBL IDs as a lsit
+genes_oi <- short_list$mgi_symbol
+
+#make unique
+genes_oi <- unique(genes_oi)
+
+#write.csv(genes_oi, file = "DamID_2kb/ASCL1_d2_no_FOXO1_d2_2kb_genes.csv")
+
+
+#unique to FOXO1 day 2
+FOXO1_d2_only <- setdiff(FOXO1_d2_uni_feat$feature, ASCL1_d2_uni_feat$feature)
+
+#identify the row with the genes of interest
+row_boo <- annotTable$ensembl_gene_id %in% FOXO1_d2_only
+
+#add it as a new column
+annotTable$row_boo <- row_boo
+
+#filter out only row_boo True columns and make a list of the ENSEMBL IDs of those genes
+short_list <- annotTable %>% dplyr::filter(row_boo == T)
+
+#call the ENSEMBL IDs as a lsit
+genes_oi <- short_list$mgi_symbol
+
+#make unique
+genes_oi <- unique(genes_oi)
+
+#write.csv(genes_oi, file = "DamID_2kb/FOXO1_d2_no_ASCL1_d2_2kb_genes.csv")
+```
+
+Now do similar for ASCL1 binding at day 6 and FOXO1 binding at day 6
+```{r}
+library(ChIPpeakAnno)
+#load the significant peaks called by Alex
+ASCL1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+
+#annotate
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature < 2000]
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature > -2000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d6<- ASCL1_d6[ASCL1_d6$distancetoFeature < 2000]
+ASCL1_d6 <- ASCL1_d6[ASCL1_d6$distancetoFeature > -2000]
+
+#unique features
+# Subset the GRanges object to include only the first occurrence of each unique feature
+FOXO1_d6_uni_feat <- FOXO1_d6[!duplicated(mcols(FOXO1_d6)$feature)]
+ASCL1_d6_uni_feat <- ASCL1_d6[!duplicated(mcols(ASCL1_d6)$feature)]
+
+
+#make a list of the genes to create a Venndiagram
+venn_list <- list(ASCL1_d6 = ASCL1_d6_uni_feat$feature, 
+     FOXO1_d6 = FOXO1_d6_uni_feat$feature)
+
+#plot
+ggvenn(venn_list, auto_scale = T, fill_alpha = 0.5)
+
+#find genes having a significant peak ± 2 kb from the TSS from ASCL1 day 2 and FOXO1 day 6
+shared_genes <- intersect(ASCL1_d6_uni_feat$feature, FOXO1_d6_uni_feat$feature)
+
+#make an output of all shared genes with ENSEMBL IDs
+#write.csv(shared_genes, file = "DamID_2kb/day_6_shared_genes.csv")
+
+#load GRange of genes from EnsDb
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#following table can be used to cross-reference ENSEMBL IDs to gene symbols
+annotTable <- getBM(
+  attributes = c(
+    'ensembl_gene_id',
+    'ensembl_transcript_id',
+    'mgi_symbol'),
+  mart = mart)
+
+#identify the row with the genes of interest
+row_boo <- annotTable$ensembl_gene_id %in% shared_genes
+
+#add it as a new column
+annotTable$row_boo <- row_boo
+
+#filter out only row_boo True columns and make a list of the ENSEMBL IDs of those genes
+short_list <- annotTable %>% dplyr::filter(row_boo == T)
+
+#call the ENSEMBL IDs as a lsit
+genes_oi <- short_list$mgi_symbol
+
+#make unique
+genes_oi <- unique(genes_oi)
+
+#write.csv(genes_oi, file = "DamID_2kb/ASCL1_d6_FOXO1_d6_2kb_genes.csv")
+
+#unique to ASCL1 day 6
+ASCL1_d6_only <- setdiff(ASCL1_d6_uni_feat$feature, FOXO1_d6_uni_feat$feature)
+
+#identify the row with the genes of interest
+row_boo <- annotTable$ensembl_gene_id %in% ASCL1_d6_only
+
+#add it as a new column
+annotTable$row_boo <- row_boo
+
+#filter out only row_boo True columns and make a list of the ENSEMBL IDs of those genes
+short_list <- annotTable %>% dplyr::filter(row_boo == T)
+
+#call the ENSEMBL IDs as a lsit
+genes_oi <- short_list$mgi_symbol
+
+#make unique
+genes_oi <- unique(genes_oi)
+
+#write.csv(genes_oi, file = "DamID_2kb/ASCL1_d6_no_FOXO1_d6_2kb_genes.csv")
+
+
+#unique to FOXO1 day 6
+FOXO1_d6_only <- setdiff(FOXO1_d6_uni_feat$feature, ASCL1_d6_uni_feat$feature)
+
+#identify the row with the genes of interest
+row_boo <- annotTable$ensembl_gene_id %in% FOXO1_d6_only
+
+#add it as a new column
+annotTable$row_boo <- row_boo
+
+#filter out only row_boo True columns and make a list of the ENSEMBL IDs of those genes
+short_list <- annotTable %>% dplyr::filter(row_boo == T)
+
+#call the ENSEMBL IDs as a lsit
+genes_oi <- short_list$mgi_symbol
+
+#make unique
+genes_oi <- unique(genes_oi)
+
+#write.csv(genes_oi, file = "DamID_2kb/FOXO1_d6_no_ASCL1_d6_2kb_genes.csv")
+```
