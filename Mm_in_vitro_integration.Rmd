@@ -1,0 +1,1105 @@
+---
+title: "In_vitro_integration"
+output: html_document
+date: '2025-04-26'
+---
+
+This is a script written by Jens Bager Christensen (jbc53@cam.ac.uk) to validate the cell identity of our primary NEP cultures established from neonatal mice cerebella.
+
+Load packages and define functions
+```{r}
+library(Seurat)
+library(tidyverse)
+set.seed(1234)
+
+#Defining parameters to test different resolutions for clustering
+res.range <- c(seq(0.1,2,0.05))
+assay <- "SCT"
+dims <- 30
+reduction <- "pca"
+
+#Defining a function, which clusters a RDS in a range of resolutions, and calculates both the silhouette score and the negative silhouette proportion to determine which resolution is optimal
+clusteringKit <- function(name, assay, dim, res.range, reduction){
+  DefaultAssay(name) <- assay
+  #using FindNeighbors (Seurat), a KNN based clustering algorithm, to compute a SNN graph, which then can be used to cluster the cells w. their neighbors
+  name <- FindNeighbors(name, dims=1:dim, reduction=reduction)
+  for (i in res.range){
+    #FindClusters is used to cluster the aforementioned SNN graph by optimising the modularity function. This is carried out for all resolutions in the range of interest.
+    name <- FindClusters(name, resolution=i)
+  }
+DefaultAssay(name) <- assay
+  dist.matrix <- dist(x = Embeddings(object = name[[reduction]])[, 1:dim])
+ clusters <- paste0(assay,"_snn_res.", res.range)
+  getSil <- function(clr) {
+    clr <- name@meta.data[[clr]]
+    sil <- cluster::silhouette(x = as.numeric(x = as.factor(x = clr)), dist = dist.matrix)
+    sil_value <- sil
+    return(sil_value)
+  }
+  
+  sls <- lapply(clusters, getSil) #mc.cores = 1)
+  sls_median <- sapply(sls, function(x) median(x[,3])) %>% setNames(., res.range)
+  sls_neg_prop <- sapply(sls, function(x) sum(x[,3]<0)/length(x[,3])) %>% setNames(., res.range)
+  p_list <- lapply(res.range, function(res){
+    #Idents(name) = name@meta.data[paste0(assay, "_snn_res.",res)]
+    DimPlot(name, reduction = "umap", label = TRUE, group.by = paste0(assay, "_snn_res.",res), pt.size =0.3, raster=F)
+  })
+  return(list(name=name, sls_median=sls_median, sls_neg_prop=sls_neg_prop, dimplots=p_list))
+}
+```
+
+
+_perform integration of primary mouse neurosphere cultures_
+
+Read in the output of CellRanger aligned to GRCm39 and create a RDS object out of this. 
+Classify cells based on the multiplex assay, which contains expression of the 12 used CMOs.
+Thereafter, remove all _but_ CMO311 and CMO312 because these samples were mouse NEPs.
+Following this vignette : https://www.10xgenomics.com/analysis-guides/tag-assignment-of-10x-Genomics-cellplex-data-using-seurats-htodemux-function
+```{r}
+#read in the output from 'cellranger multi' performed using CellRanger 8.0.1. Aligning only to GRCm39
+data <- Read10X("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/primary_human_NEPs_GRCm39/outs/multi/count/raw_feature_bc_matrix/")
+
+#Add the CellPlex as a CMO assay
+adata = CreateSeuratObject(counts = data$`Gene Expression`)
+adata[['CMO']] = CreateAssayObject(counts = data$`Multiplexing Capture`)
+
+#identify cells with confident sample called based on cellranger
+library(data.table)
+cells <- fread("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/primary_human_NEPs_GRCm39/outs/multi/multiplexing_analysis/assignment_confidence_table.csv")
+
+#remove cells assigned either Multiplet or Unassigned
+cells <- cells %>% dplyr::filter(Assignment != "Multiplet" & Assignment != "Unassigned")
+
+#extract only barcodes called with confident sample call
+adata <- subset(adata, cells = cells$Barcode)
+
+#remove cell without CMO counts
+DefaultAssay(adata)<-"CMO"
+adata <-  subset(x = adata, subset = nCount_CMO > 0)
+
+#Normalize the CMO data and run the HTODemux function. Read more https://satijalab.org/seurat/archive/v3.1/hashing_vignette.html
+adata <- NormalizeData(adata, assay = "CMO", normalization.method = "CLR")
+adata <- HTODemux(adata, assay = "CMO", positive.quantile = 0.99)
+
+#print out the amount of negative, doublets and singlets
+print(table(adata$CMO_classification.global))
+
+#Check the expression levels of CMO ID
+#The true positive cells should be well distanced from the other CMO IDs 
+RidgePlot(adata, assay = "CMO", features = rownames(adata[["CMO"]])[1:12], ncol = 6)
+
+#Create individual Seurat objects of CMO311 and CMO3012, which are established from SW and Nes-CFP mice, respectively.
+Idents(adata) <- "hash.ID"
+adata_SW <- subset(adata, idents = c("CMO311"))
+adata_NesCFP <- subset(adata, idents = c("CMO312"))
+```
+
+
+_The initial analysis is performed on the SW data starting with QC_
+
+```{r}
+#change assay to RNA
+adata_SW@active.assay <- "RNA"
+
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+adata_SW[["percent.mt"]] <- PercentageFeatureSet(adata_SW, pattern = "^mt-")
+
+# Visualize QC metrics as a violin plot
+VlnPlot(adata_SW, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, alpha = 0.05)
+
+#remove outliers beased on amount of features detected and too high mitochondrial reads
+adata_SW <- subset(adata_SW, subset = nFeature_RNA > 200 & nFeature_RNA < 7500 & percent.mt < 7.5)
+
+#run sctransform, normalising features, counts and percent mitochondrial reads
+adata_SW <- SCTransform(adata_SW, vars.to.regress = c("nFeature_RNA", "nCount_RNA", "percent.mt"), verbose = FALSE)
+
+#perform dimension reduction using PCA and UMAP to visualise the data 
+adata_SW <- RunPCA(adata_SW, verbose = FALSE)
+adata_SW <- RunUMAP(adata_SW, dims = 1:30, verbose = FALSE)
+
+#perform cell cycle scoring and regress out the difference between S and G2M
+m.cc.genes <- lapply(cc.genes, str_to_title)
+adata_SW <- CellCycleScoring(adata_SW, s.features = m.cc.genes$s.genes, g2m.features = m.cc.genes$g2m.genes)
+
+#visualise the phase on a DimPlot
+DimPlot(adata_SW, group.by = "Phase")
+
+#regress out the difference between G2M and S using sctransform
+adata_SW$CC.Difference <- adata_SW$S.Score - adata_SW$G2M.Score
+adata_SW <- SCTransform(adata_SW, vars.to.regress = c("CC.Difference"))
+
+#redo the dimension reduction
+adata_SW <- RunPCA(adata_SW, verbose = FALSE)
+adata_SW <- RunUMAP(adata_SW, dims = 1:30, verbose = FALSE)
+
+#visualise the Dimplot with metadata variables of interest
+DimPlot(adata_SW, group.by = "hash.ID") & NoAxes()
+DimPlot(adata_SW, group.by = "Phase") & NoAxes()
+
+#featureplot markers of interest
+FeaturePlot(adata_SW, features = c("Nes", "Sox2", "Ascl1", "Hopx", "Slc6a11", "Foxo1")) & NoAxes()
+```
+
+
+_Perform clustering and cluster analysis to annotate the clusters_
+```{r}
+#try to cluster using a range of resolutions to identifying a meaningful resolution parameter
+adata_SW <- clusteringKit(adata_SW, assay="SCT", dim=30, res.range=seq(0.1, 3, 0.1), reduction="pca")
+
+#plot the Silhouette score and negative Silhouette score to get an impression of the different clustering resolutions
+plot(adata_SW$sls_median~seq(0.1,3,0.1), type = "l", ylab = "Silhouette score") & plot(adata_SW$sls_neg_prop~seq(0.1,3,0.1), type = "l", ylab = "Negative silhouette proportion score")
+#resolution of 0.2 seems most appropriate 
+
+#rename the object
+adata_SW <- adata_SW$name
+
+#Plot with the identified resolution and compare to the previous annotations
+DimPlot(adata_SW, label = T, label.box = T, repel = T, group.by = "SCT_snn_res.0.2") + ggtitle("Mouse cells clustered with a resolution of 0.2") & NoLegend() & NoAxes()
+
+#calculate marker genes for the clusters by setting the assay to RNA and the idents to the clustering computed with the optimal resolution.
+DefaultAssay(adata_SW) <- 'SCT'
+Idents(adata_SW) <- "SCT_snn_res.0.2"
+adata_SW <- PrepSCTFindMarkers(adata_SW, assay = "SCT", verbose = TRUE)
+adata_SW_markers <- FindAllMarkers(adata_SW, only.pos = TRUE, min.pct = 0.10, logfc.threshold = 0.25, assay = "SCT")
+
+#save the markers
+#write_csv(adata_SW_markers, "Ms_in_vitro/SW_cluster_markers.csv")
+
+#Cluster annotations
+#0 Hopx / Nes / Sox2 (Hopx-NEPs)
+#1 Mki67 / Top2a / Nes / Hopx / Ascl1 (proliferating NEPs)
+#2 Ascl1 / Nes (Ascl1-NEPs)
+
+#featureplot markers of interest
+VlnPlot(adata_SW, features = c("Ascl1", "Nes", "Hopx", "Sox2", "Crlf1", "Slc6a11"), group.by = "SCT_snn_res.0.2")
+DotPlot(adata_SW, features = c("Hopx", "Nes", "Sox2", "Mki67", "Top2a", "Ascl1"), group.by = "SCT_snn_res.0.2")
+
+FeaturePlot(adata_SW, features = c("Hopx", "Nes", "Sox2", "Mki67", "Top2a", "Ascl1"))
+
+#save the suerat object
+#saveRDS(adata_SW, "../data/rds/primary_human_NEPs_SW.rds")
+```
+
+
+_Integrating with in vivo data_
+Starting off by integrating the in vitro data with our full in vivo data set.
+```{r}
+#require("AnnotationDbi")
+#require("org.Mm.eg.db")
+#require("TimeSeriesExperiment")
+#require(ggsankey)
+#require(org.Mm.eg.db)
+
+#back up the seurat rds in case the process does not work out
+integrator_rds <- adata_SW
+
+#Read in the full (nonIR) data set from the in vivo experiment
+in_vivo <- readRDS(file = "../data/rds/nonIR_all_NEPs.rds")
+
+#calculate top 200 variable features across that data set
+marker_genes_in_vivo <- VariableFeatures(in_vivo, nfeatures = 200)
+
+
+#because the in vitro data has gene symbols instead of ENSEMBL IDs we transform the RDS to a single cell experiment object
+#to rename the genes to be compatible with the in vivo genes
+integrator_rds <- as.SingleCellExperiment(integrator_rds, assay = "SCT")
+
+#use mapIds and the org.Mm.eg.db to make a dictionary with gene symbols and ENSEMBL IDs
+gene_names <- mapIds(org.Mm.eg.db, keys=rownames(integrator_rds), keytype="SYMBOL", columns="ENSEMBL",column="ENSEMBL")
+
+#add the ENSEMBL IDs of the gene names as rowData of the sce object
+rowData(integrator_rds)$ENSEMBL <- gene_names
+#add the gene symbols of the gene names as rowData of the sce object
+rowData(integrator_rds)$SYMBOL <- rownames(integrator_rds)
+
+#remove the ones where no ENSEMBL ID could be found (e.g. NAs)
+integrator_rds <- integrator_rds[! is.na(rowData(integrator_rds)$ENSEMBL),]
+
+#make the gene list unique
+integrator_rds <- integrator_rds[isUnique(rowData(integrator_rds)$ENSEMBL),]
+
+#subset only the genes which are part of the computed top 200 variable features from the in vivo data
+#this is done to ensure meaningful genes are used for the label transfer and it is not driven by e.g. lowly expressed genes
+integrator_rds <- integrator_rds[rowData(integrator_rds)$ENSEMBL %in% marker_genes_in_vivo,]
+
+#rename the genes of the in vitro data to the ENSEMBL counterparts
+row.names(integrator_rds) <- rowData(integrator_rds)$ENSEMBL
+
+#convert the sce object back into a seurat object
+integrator_rds <- as.Seurat(integrator_rds, counts = "counts", data = "logcounts")
+
+#identify transferanchors as described in https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds.anchors <- FindTransferAnchors(reference = in_vivo, query = integrator_rds, dims = 1:40,
+    reference.reduction = "pca", normalization.method = "SCT")
+
+#set seed for consistency
+set.seed(1234)
+#redo the UMAP reductino of the in vivo data, because return.model needs to be TRUE for the MapQuery
+in_vivo <- RunUMAP(in_vivo, dims = 1:30, n.neighbors = 30, return.model = T)
+
+
+#use MapQuery to perform the label transfer as according to https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds <- MapQuery(anchorset = integrator_rds.anchors, reference = in_vivo, query = integrator_rds,
+    refdata = list(celltype = "SCT_snn_res.0.4"), reference.reduction = "pca", reduction.model = "umap", query.dims = 1000)
+
+
+#alter the output column with predicted cell types for any label transfer with a prediction score less than 0.6
+integrator_rds$celltype <- ifelse(integrator_rds$predicted.celltype.score > 0.6, integrator_rds$predicted.celltype, "Unassigned")
+
+#provide the matching colour palette
+library(scales)
+my_color_palette <- hue_pal()(length(levels(as.factor(in_vivo@meta.data$SCT_snn_res.0.4))))
+my_color_palette <- c(my_color_palette[1], my_color_palette[3],my_color_palette[5], my_color_palette[7],my_color_palette[12])
+
+#plot the UMAP of the in vivo data and the in vitro data projected onto the reference UMAP
+p1 <- DimPlot(in_vivo, reduction = "umap", group.by = "SCT_snn_res.0.4", label = F, label.size = 3,
+    repel = TRUE) + ggtitle("Reference annotations") + xlim(-20,20) + ylim(-20,20) & NoAxes()
+p2 <- DimPlot(integrator_rds, reduction = "ref.umap", group.by = "celltype", label = F,
+    label.size = 3, repel = TRUE) + ggtitle("Query transferred labels")  + xlim(-20,20) + ylim(-20,20) & NoAxes() #, cols = my_color_palette
+p1 + p2
+
+#write a table with how big a percentage of the in vitro data is mapped to different clusters of the reference
+table(integrator_rds@meta.data$celltype)/length(integrator_rds@meta.data$celltype)*100
+
+#make a data from of the seurat object meta data to plot a sankey plot
+df <- integrator_rds@meta.data %>% 
+  ggsankey::make_long(CMO_maxID, celltype)
+
+#plot a sankey plot - colours were changed in illustrator to match clustering
+ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = node,
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size=2, fill = "white") +
+  theme_sankey(base_size = 16) + NoLegend() +
+  scale_x_discrete(labels=c(
+    'CMO_maxID' = 'In vitro cells',
+    'celltype' = 'In vivo cells'
+    ))  + labs(x = "")
+
+
+# Extract UMAP embedding
+in_vivo_umap <- Embeddings(in_vivo, reduction = "umap") %>% as.data.frame()
+in_vivo_umap$source <- "in_vivo"
+in_vivo_umap$group <- in_vivo@meta.data$SCT_snn_res.0.4
+
+in_vitro_umap <- Embeddings(integrator_rds, reduction = "ref.umap") %>% as.data.frame()
+in_vitro_umap$source <- "in_vitro"
+in_vitro_umap$group <- integrator_rds$celltype  # <- Replace with actual column
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2), color = "grey80", size = 0.5) +
+  geom_point(data = in_vitro_umap, aes(x = refUMAP_1, y = refUMAP_2, color = group), size = 0.7) +
+  scale_color_manual(values = my_color_palette) +
+  theme_void() +
+  theme(legend.position = "right") & NoLegend()
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2, color = group), size = 0.5) +
+  scale_color_manual(values = hue_pal()(length(levels(as.factor(in_vivo@meta.data$SCT_snn_res.0.4))))) +
+  theme_void() +
+  theme(legend.position = "right")
+```
+
+Secondly, we try to integrate it with our NEPs-only subset
+```{r}
+#back up the seurat rds in case the process does not work out
+integrator_rds <- adata_SW
+
+#Read in the full (nonIR) data set from the in vivo experiment
+in_vivo_NEPs <- readRDS(file = "../data/rds/nonIR_VZ_NEPs.rds")
+
+#calculate top 200 variable features across that data set
+marker_genes_in_vivo_NEPs <- VariableFeatures(in_vivo_NEPs, nfeatures = 200)
+
+
+#because the in vitro data has gene symbols instead of ENSEMBL IDs we transform the RDS to a single cell experiment object
+#to rename the genes to be compatible with the in vivo genes
+integrator_rds <- as.SingleCellExperiment(integrator_rds, assay = "SCT")
+
+#use mapIds and the org.Mm.eg.db to make a dictionary with gene symbols and ENSEMBL IDs
+gene_names <- mapIds(org.Mm.eg.db, keys=rownames(integrator_rds), keytype="SYMBOL", columns="ENSEMBL",column="ENSEMBL")
+
+#add the ENSEMBL IDs of the gene names as rowData of the sce object
+rowData(integrator_rds)$ENSEMBL <- gene_names
+#add the gene symbols of the gene names as rowData of the sce object
+rowData(integrator_rds)$SYMBOL <- rownames(integrator_rds)
+
+#remove the ones where no ENSEMBL ID could be found (e.g. NAs)
+integrator_rds <- integrator_rds[! is.na(rowData(integrator_rds)$ENSEMBL),]
+
+#make the gene list unique
+integrator_rds <- integrator_rds[isUnique(rowData(integrator_rds)$ENSEMBL),]
+
+#subset only the genes which are part of the computed top 200 variable features from the in vivo data
+#this is done to ensure meaningful genes are used for the label transfer and it is not driven by e.g. lowly expressed genes
+integrator_rds <- integrator_rds[rowData(integrator_rds)$ENSEMBL %in% marker_genes_in_vivo_NEPs,]
+
+#rename the genes of the in vitro data to the ENSEMBL counterparts
+row.names(integrator_rds) <- rowData(integrator_rds)$ENSEMBL
+
+#convert the sce object back into a seurat object
+integrator_rds <- as.Seurat(integrator_rds, counts = "counts", data = "logcounts")
+
+#identify transferanchors as described in https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds.anchors <- FindTransferAnchors(reference = in_vivo_NEPs, query = integrator_rds, dims = 1:40,
+    reference.reduction = "pca", normalization.method = "SCT")
+
+#set seed for consistency
+set.seed(1234)
+#redo the UMAP reductino of the in vivo data, because return.model needs to be TRUE for the MapQuery
+in_vivo_NEPs <- RunUMAP(in_vivo_NEPs, dims = 1:30, n.neighbors = 30, return.model = T)
+
+
+#use MapQuery to perform the label transfer as according to https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds <- MapQuery(anchorset = integrator_rds.anchors, reference = in_vivo_NEPs, query = integrator_rds,
+    refdata = list(celltype = "SCT_snn_res.0.9"), reference.reduction = "pca", reduction.model = "umap", query.dims = 1000)
+
+
+#alter the output column with predicted cell types for any label transfer with a prediction score less than 0.6
+integrator_rds$celltype <- ifelse(integrator_rds$predicted.celltype.score > 0.5, integrator_rds$predicted.celltype, "Unassigned")
+
+#plot the UMAP of the in vivo data and the in vitro data projected onto the reference UMAP
+p1 <- DimPlot(in_vivo_NEPs, reduction = "umap", group.by = "SCT_snn_res.0.9", label = F, label.size = 3,
+    repel = TRUE) + ggtitle("Reference annotations") + xlim(-20,20) + ylim(-20,20) & NoAxes()
+p2 <- DimPlot(integrator_rds, reduction = "ref.umap", group.by = "celltype", label = F,
+    label.size = 3, repel = TRUE) + ggtitle("Query transferred labels")  + xlim(-20,20) + ylim(-20,20) & NoAxes() #, cols = my_color_palette
+p1 + p2
+
+#write a table with how big a percentage of the in vitro data is mapped to different clusters of the reference
+table(integrator_rds@meta.data$celltype)/length(integrator_rds@meta.data$celltype)*100
+
+#make a data from of the seurat object meta data to plot a sankey plot
+df <- integrator_rds@meta.data %>% 
+  ggsankey::make_long(CMO_maxID, celltype)
+
+#plot a sankey plot - colours were changed in illustrator to match clustering
+ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = node,
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size=2, fill = "white") +
+  theme_sankey(base_size = 16) + NoLegend() +
+  scale_x_discrete(labels=c(
+    'CMO_maxID' = 'In vitro cells',
+    'celltype' = 'In vivo cells'
+    ))  + labs(x = "")
+
+
+# Extract UMAP embedding
+in_vivo_umap <- Embeddings(in_vivo_NEPs, reduction = "umap") %>% as.data.frame()
+in_vivo_umap$source <- "in_vivo"
+in_vivo_umap$group <- in_vivo_NEPs@meta.data$SCT_snn_res.0.9
+
+in_vitro_umap <- Embeddings(integrator_rds, reduction = "ref.umap") %>% as.data.frame()
+in_vitro_umap$source <- "in_vitro"
+in_vitro_umap$group <- integrator_rds$celltype
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2), color = "grey80", size = 0.5) +
+  geom_point(data = in_vitro_umap, aes(x = refUMAP_1, y = refUMAP_2, color = group), size = 0.7) +
+  #scale_color_manual(values = my_color_palette) +
+  theme_void() +
+  theme(legend.position = "right") & NoLegend()
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2, color = group), size = 0.5) +
+  scale_color_manual(values = hue_pal()(length(levels(as.factor(in_vivo_NEPs@meta.data$SCT_snn_res.0.9))))) +
+  theme_void() +
+  theme(legend.position = "right")
+```
+
+
+
+
+_similarly the same analysis is perform on the cell derived from the NES-CFP animal_
+
+```{r}
+#change assay to RNA
+adata_NesCFP@active.assay <- "RNA"
+
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+adata_NesCFP[["percent.mt"]] <- PercentageFeatureSet(adata_NesCFP, pattern = "^mt-")
+
+# Visualize QC metrics as a violin plot
+VlnPlot(adata_NesCFP, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, alpha = 0.05)
+
+#remove outliers beased on amount of features detected and too high mitochondrial reads
+adata_NesCFP <- subset(adata_NesCFP, subset = nFeature_RNA > 200 & nFeature_RNA < 7500 & percent.mt < 7.5)
+
+#run sctransform, normalising features, counts and percent mitochondrial reads
+adata_NesCFP <- SCTransform(adata_NesCFP, vars.to.regress = c("nFeature_RNA", "nCount_RNA", "percent.mt"), verbose = FALSE)
+
+#perform dimension reduction using PCA and UMAP to visualise the data 
+adata_NesCFP <- RunPCA(adata_NesCFP, verbose = FALSE)
+adata_NesCFP <- RunUMAP(adata_NesCFP, dims = 1:30, verbose = FALSE)
+
+#perform cell cycle scoring and regress out the difference between S and G2M
+adata_NesCFP <- CellCycleScoring(adata_NesCFP, s.features = m.cc.genes$s.genes, g2m.features = m.cc.genes$g2m.genes)
+
+#visualise the phase on a DimPlot
+DimPlot(adata_NesCFP, group.by = "Phase")
+
+#regress out the difference between G2M and S using sctransform
+adata_NesCFP$CC.Difference <- adata_NesCFP$S.Score - adata_NesCFP$G2M.Score
+adata_NesCFP <- SCTransform(adata_NesCFP, vars.to.regress = c("CC.Difference"))
+
+#redo the dimension reduction
+adata_NesCFP <- RunPCA(adata_NesCFP, verbose = FALSE)
+adata_NesCFP <- RunUMAP(adata_NesCFP, dims = 1:30, verbose = FALSE)
+
+#visualise the Dimplot with metadata variables of interest
+DimPlot(adata_NesCFP, group.by = "hash.ID") & NoAxes()
+DimPlot(adata_NesCFP, group.by = "Phase") & NoAxes()
+
+#featureplot markers of interest
+FeaturePlot(adata_NesCFP, features = c("Nes", "Sox2", "Ascl1", "Hopx", "Slc6a11", "Foxo1")) & NoAxes()
+```
+
+_Perform clustering and cluster analysis to annotate the clusters_
+```{r}
+#try to cluster using a range of resolutions to identifying a meaningful resolution parameter
+adata_NesCFP <- clusteringKit(adata_NesCFP, assay="SCT", dim=30, res.range=seq(0.1, 3, 0.1), reduction="pca")
+
+#plot the Silhouette score and negative Silhouette score to get an impression of the different clustering resolutions
+plot(adata_NesCFP$sls_median~seq(0.1,3,0.1), type = "l", ylab = "Silhouette score") & plot(adata_NesCFP$sls_neg_prop~seq(0.1,3,0.1), type = "l", ylab = "Negative silhouette proportion score")
+#resolution of 0.3 seems most appropriate 
+
+#rename the object
+adata_NesCFP <- adata_NesCFP$name
+
+#Plot with the identified resolution and compare to the previous annotations
+DimPlot(adata_NesCFP, label = T, label.box = T, repel = T, group.by = "SCT_snn_res.0.3") + ggtitle("Mouse cells clustered with a resolution of 0.3") & NoLegend() & NoAxes()
+
+#calculate marker genes for the clusters by setting the assay to RNA and the idents to the clustering computed with the optimal resolution.
+DefaultAssay(adata_NesCFP) <- 'SCT'
+Idents(adata_NesCFP) <- "SCT_snn_res.0.3"
+adata_NesCFP <- PrepSCTFindMarkers(adata_NesCFP, assay = "SCT", verbose = TRUE)
+adata_NesCFP_markers <- FindAllMarkers(adata_NesCFP, only.pos = TRUE, min.pct = 0.10, logfc.threshold = 0.25, assay = "SCT")
+
+#save the markers
+write_csv(adata_NesCFP_markers, "Ms_in_vitro/NesCFP_cluster_markers.csv")
+
+#Cluster annotations
+#0 Ascl1 / Nes
+#1 Hopx / Sox2 / Nes
+#2 Mki67 / Top2a
+
+#featureplot markers of interest
+VlnPlot(adata_NesCFP, features = c("Ascl1", "Nes", "Hopx", "Sox2", "Crlf1", "Slc6a11"), group.by = "SCT_snn_res.0.2")
+DotPlot(adata_NesCFP, features = c("Hopx", "Nes", "Sox2", "Mki67", "Top2a", "Ascl1"), group.by = "SCT_snn_res.0.2")
+
+FeaturePlot(adata_NesCFP, features = c("Hopx", "Nes", "Sox2", "Mki67", "Top2a", "Ascl1"))
+
+#save sueart object
+#saveRDS(adata_NesCFP, "../data/rds/primary_human_NEPs_NesCFP.rds")
+```
+
+
+
+
+_Integrating with in vivo data_
+Like for the primary SW cultures, we start by integrating it with our full in vivo data set
+```{r}
+#require("AnnotationDbi")
+#require("org.Mm.eg.db")
+#require("TimeSeriesExperiment")
+#require(ggsankey)
+#require(org.Mm.eg.db)
+
+#back up the seurat rds in case the process does not work out
+integrator_rds <- adata_NesCFP
+
+#Read in the full (nonIR) data set from the in vivo experiment
+in_vivo <- readRDS(file = "../data/rds/nonIR_all_NEPs.rds")
+
+#calculate top 200 variable features across that data set
+marker_genes_in_vivo <- VariableFeatures(in_vivo, nfeatures = 200)
+
+
+#because the in vitro data has gene symbols instead of ENSEMBL IDs we transform the RDS to a single cell experiment object
+#to rename the genes to be compatible with the in vivo genes
+integrator_rds <- as.SingleCellExperiment(integrator_rds, assay = "SCT")
+
+#use mapIds and the org.Mm.eg.db to make a dictionary with gene symbols and ENSEMBL IDs
+gene_names <- mapIds(org.Mm.eg.db, keys=rownames(integrator_rds), keytype="SYMBOL", columns="ENSEMBL",column="ENSEMBL")
+
+#add the ENSEMBL IDs of the gene names as rowData of the sce object
+rowData(integrator_rds)$ENSEMBL <- gene_names
+#add the gene symbols of the gene names as rowData of the sce object
+rowData(integrator_rds)$SYMBOL <- rownames(integrator_rds)
+
+#remove the ones where no ENSEMBL ID could be found (e.g. NAs)
+integrator_rds <- integrator_rds[! is.na(rowData(integrator_rds)$ENSEMBL),]
+
+#make the gene list unique
+integrator_rds <- integrator_rds[isUnique(rowData(integrator_rds)$ENSEMBL),]
+
+#subset only the genes which are part of the computed top 200 variable features from the in vivo data
+#this is done to ensure meaningful genes are used for the label transfer and it is not driven by e.g. lowly expressed genes
+integrator_rds <- integrator_rds[rowData(integrator_rds)$ENSEMBL %in% marker_genes_in_vivo,]
+
+#rename the genes of the in vitro data to the ENSEMBL counterparts
+row.names(integrator_rds) <- rowData(integrator_rds)$ENSEMBL
+
+#convert the sce object back into a seurat object
+integrator_rds <- as.Seurat(integrator_rds, counts = "counts", data = "logcounts")
+
+#identify transferanchors as described in https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds.anchors <- FindTransferAnchors(reference = in_vivo, query = integrator_rds, dims = 1:40,
+    reference.reduction = "pca", normalization.method = "SCT")
+
+#set seed for consistency
+set.seed(1234)
+#redo the UMAP reductino of the in vivo data, because return.model needs to be TRUE for the MapQuery
+in_vivo <- RunUMAP(in_vivo, dims = 1:30, n.neighbors = 30, return.model = T)
+
+
+#use MapQuery to perform the label transfer as according to https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds <- MapQuery(anchorset = integrator_rds.anchors, reference = in_vivo, query = integrator_rds,
+    refdata = list(celltype = "SCT_snn_res.0.4"), reference.reduction = "pca", reduction.model = "umap", query.dims = 1000)
+
+
+#alter the output column with predicted cell types for any label transfer with a prediction score less than 0.6
+integrator_rds$celltype <- ifelse(integrator_rds$predicted.celltype.score > 0.6, integrator_rds$predicted.celltype, "Unassigned")
+
+#provide the matching colour palette
+library(scales)
+my_color_palette <- hue_pal()(length(levels(as.factor(in_vivo@meta.data$SCT_snn_res.0.4))))
+my_color_palette <- c(my_color_palette[1], my_color_palette[5], my_color_palette[7],my_color_palette[12])
+
+#plot the UMAP of the in vivo data and the in vitro data projected onto the reference UMAP
+p1 <- DimPlot(in_vivo, reduction = "umap", group.by = "SCT_snn_res.0.4", label = F, label.size = 3,
+    repel = TRUE) + ggtitle("Reference annotations") + xlim(-20,20) + ylim(-20,20) & NoAxes()
+p2 <- DimPlot(integrator_rds, reduction = "ref.umap", group.by = "celltype", label = F,
+    label.size = 3, repel = TRUE) + ggtitle("Query transferred labels")  + xlim(-20,20) + ylim(-20,20) & NoAxes() #, cols = my_color_palette
+p1 + p2
+
+#write a table with how big a percentage of the in vitro data is mapped to different clusters of the reference
+table(integrator_rds@meta.data$celltype)/length(integrator_rds@meta.data$celltype)*100
+
+#make a data from of the seurat object meta data to plot a sankey plot
+df <- integrator_rds@meta.data %>% 
+  ggsankey::make_long(CMO_maxID, celltype)
+
+#plot a sankey plot - colours were changed in illustrator to match clustering
+ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = node,
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size=2, fill = "white") +
+  theme_sankey(base_size = 16) + NoLegend() +
+  scale_x_discrete(labels=c(
+    'CMO_maxID' = 'In vitro cells',
+    'celltype' = 'In vivo cells'
+    ))  + labs(x = "")
+
+
+# Extract UMAP embedding
+in_vivo_umap <- Embeddings(in_vivo, reduction = "umap") %>% as.data.frame()
+in_vivo_umap$source <- "in_vivo"
+in_vivo_umap$group <- in_vivo@meta.data$SCT_snn_res.0.4
+
+in_vitro_umap <- Embeddings(integrator_rds, reduction = "ref.umap") %>% as.data.frame()
+in_vitro_umap$source <- "in_vitro"
+in_vitro_umap$group <- integrator_rds$celltype  # <- Replace with actual column
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2), color = "grey80", size = 0.5) +
+  geom_point(data = in_vitro_umap, aes(x = refUMAP_1, y = refUMAP_2, color = group), size = 0.7) +
+  scale_color_manual(values = my_color_palette) +
+  theme_void() +
+  theme(legend.position = "right") & NoLegend()
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2, color = group), size = 0.5) +
+  scale_color_manual(values = hue_pal()(length(levels(as.factor(in_vivo@meta.data$SCT_snn_res.0.4))))) +
+  theme_void() +
+  theme(legend.position = "right")
+```
+
+
+Secondly, we try to integrate it with our NEPs-only subset
+```{r}
+#back up the seurat rds in case the process does not work out
+integrator_rds <- adata_NesCFP
+
+#Read in the full (nonIR) data set from the in vivo experiment
+in_vivo_NEPs <- readRDS(file = "../data/rds/nonIR_VZ_NEPs.rds")
+
+#calculate top 200 variable features across that data set
+marker_genes_in_vivo_NEPs <- VariableFeatures(in_vivo_NEPs, nfeatures = 200)
+
+
+#because the in vitro data has gene symbols instead of ENSEMBL IDs we transform the RDS to a single cell experiment object
+#to rename the genes to be compatible with the in vivo genes
+integrator_rds <- as.SingleCellExperiment(integrator_rds, assay = "SCT")
+
+#use mapIds and the org.Mm.eg.db to make a dictionary with gene symbols and ENSEMBL IDs
+gene_names <- mapIds(org.Mm.eg.db, keys=rownames(integrator_rds), keytype="SYMBOL", columns="ENSEMBL",column="ENSEMBL")
+
+#add the ENSEMBL IDs of the gene names as rowData of the sce object
+rowData(integrator_rds)$ENSEMBL <- gene_names
+#add the gene symbols of the gene names as rowData of the sce object
+rowData(integrator_rds)$SYMBOL <- rownames(integrator_rds)
+
+#remove the ones where no ENSEMBL ID could be found (e.g. NAs)
+integrator_rds <- integrator_rds[! is.na(rowData(integrator_rds)$ENSEMBL),]
+
+#make the gene list unique
+integrator_rds <- integrator_rds[isUnique(rowData(integrator_rds)$ENSEMBL),]
+
+#subset only the genes which are part of the computed top 200 variable features from the in vivo data
+#this is done to ensure meaningful genes are used for the label transfer and it is not driven by e.g. lowly expressed genes
+integrator_rds <- integrator_rds[rowData(integrator_rds)$ENSEMBL %in% marker_genes_in_vivo_NEPs,]
+
+#rename the genes of the in vitro data to the ENSEMBL counterparts
+row.names(integrator_rds) <- rowData(integrator_rds)$ENSEMBL
+
+#convert the sce object back into a seurat object
+integrator_rds <- as.Seurat(integrator_rds, counts = "counts", data = "logcounts")
+
+#identify transferanchors as described in https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds.anchors <- FindTransferAnchors(reference = in_vivo_NEPs, query = integrator_rds, dims = 1:40,
+    reference.reduction = "pca", normalization.method = "SCT")
+
+#set seed for consistency
+set.seed(1234)
+#redo the UMAP reductino of the in vivo data, because return.model needs to be TRUE for the MapQuery
+in_vivo_NEPs <- RunUMAP(in_vivo_NEPs, dims = 1:30, n.neighbors = 30, return.model = T)
+
+
+#use MapQuery to perform the label transfer as according to https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds <- MapQuery(anchorset = integrator_rds.anchors, reference = in_vivo_NEPs, query = integrator_rds,
+    refdata = list(celltype = "SCT_snn_res.0.9"), reference.reduction = "pca", reduction.model = "umap", query.dims = 1000)
+
+
+#alter the output column with predicted cell types for any label transfer with a prediction score less than 0.6
+integrator_rds$celltype <- ifelse(integrator_rds$predicted.celltype.score > 0.5, integrator_rds$predicted.celltype, "Unassigned")
+
+#plot the UMAP of the in vivo data and the in vitro data projected onto the reference UMAP
+p1 <- DimPlot(in_vivo_NEPs, reduction = "umap", group.by = "SCT_snn_res.0.9", label = F, label.size = 3,
+    repel = TRUE) + ggtitle("Reference annotations") + xlim(-20,20) + ylim(-20,20) & NoAxes()
+p2 <- DimPlot(integrator_rds, reduction = "ref.umap", group.by = "celltype", label = F,
+    label.size = 3, repel = TRUE) + ggtitle("Query transferred labels")  + xlim(-20,20) + ylim(-20,20) & NoAxes() #, cols = my_color_palette
+p1 + p2
+
+#write a table with how big a percentage of the in vitro data is mapped to different clusters of the reference
+table(integrator_rds@meta.data$celltype)/length(integrator_rds@meta.data$celltype)*100
+
+#make a data from of the seurat object meta data to plot a sankey plot
+df <- integrator_rds@meta.data %>% 
+  ggsankey::make_long(CMO_maxID, celltype)
+
+#plot a sankey plot - colours were changed in illustrator to match clustering
+ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = node,
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size=2, fill = "white") +
+  theme_sankey(base_size = 16) + NoLegend() +
+  scale_x_discrete(labels=c(
+    'CMO_maxID' = 'In vitro cells',
+    'celltype' = 'In vivo cells'
+    ))  + labs(x = "")
+
+
+# Extract UMAP embedding
+in_vivo_umap <- Embeddings(in_vivo_NEPs, reduction = "umap") %>% as.data.frame()
+in_vivo_umap$source <- "in_vivo"
+in_vivo_umap$group <- in_vivo_NEPs@meta.data$SCT_snn_res.0.9
+
+in_vitro_umap <- Embeddings(integrator_rds, reduction = "ref.umap") %>% as.data.frame()
+in_vitro_umap$source <- "in_vitro"
+in_vitro_umap$group <- integrator_rds$celltype
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2), color = "grey80", size = 0.5) +
+  geom_point(data = in_vitro_umap, aes(x = refUMAP_1, y = refUMAP_2, color = group), size = 0.7) +
+  #scale_color_manual(values = my_color_palette) +
+  theme_void() +
+  theme(legend.position = "right") & NoLegend()
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2, color = group), size = 0.5) +
+  scale_color_manual(values = hue_pal()(length(levels(as.factor(in_vivo_NEPs@meta.data$SCT_snn_res.0.9))))) +
+  theme_void() +
+  theme(legend.position = "right")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+_sex regression work in progress_
+```{r}
+#see that sex seemingly is a big driver in the differences in the two samples based on Xist expression
+DimPlot(adata_ms, group.by = "hash.ID")
+FeaturePlot(adata_ms, features = "Xist")
+
+#Add a module score for each cell based on their Xist expression. This is necessary to regress out the sex difference.
+adata_ms <- AddModuleScore(object = adata_ms, features = "Xist", name = "Xist", ctrl = 5)
+
+
+#include the new Xist module score in SCTransform to regress out the effect
+adata_ms <- SCTransform(adata_ms, vars.to.regress = c("Xist1","CC.Difference"))
+
+#redo the dimension reduction
+adata_ms <- RunPCA(adata_ms, verbose = FALSE)
+adata_ms <- RunUMAP(adata_ms, dims = 1:30, verbose = FALSE)
+
+#visualise
+DimPlot(adata_ms, group.by = "hash.ID") & NoAxes()
+FeaturePlot(adata_ms, c("Xist", "Ddx3y", "Eif2s3y", "Uty", "Kdm5d"))
+```
+
+
+
+
+
+_Integrating with in vivo data_
+```{r}
+#require("AnnotationDbi")
+#require("org.Mm.eg.db")
+#require("TimeSeriesExperiment")
+#require(ggsankey)
+
+#back up the seurat rds in case the process does not work out
+integrator_rds <- adata_ms
+
+#Read in the full (nonIR) data set from the in vivo experiment
+in_vivo <- readRDS(file = "../data/rds/nonIR_all_NEPs.rds")
+
+#calculate top 200 variable features across that data set
+marker_genes_in_vivo <- VariableFeatures(in_vivo, nfeatures = 200)
+
+
+#because the in vitro data has gene symbols instead of ENSEMBL IDs we transform the RDS to a single cell experiment object
+#to rename the genes to be compatible with the in vivo genes
+integrator_rds <- as.SingleCellExperiment(integrator_rds, assay = "SCT")
+
+#use mapIds and the org.Mm.eg.db to make a dictionary with gene symbols and ENSEMBL IDs
+gene_names <- mapIds(org.Mm.eg.db, keys=rownames(integrator_rds), keytype="SYMBOL", columns="ENSEMBL",column="ENSEMBL")
+
+#add the ENSEMBL IDs of the gene names as rowData of the sce object
+rowData(integrator_rds)$ENSEMBL <- gene_names
+#add the gene symbols of the gene names as rowData of the sce object
+rowData(integrator_rds)$SYMBOL <- rownames(integrator_rds)
+
+#remove the ones where no ENSEMBL ID could be found (e.g. NAs)
+integrator_rds <- integrator_rds[! is.na(rowData(integrator_rds)$ENSEMBL),]
+
+#make the gene list unique
+integrator_rds <- integrator_rds[isUnique(rowData(integrator_rds)$ENSEMBL),]
+
+#subset only the genes which are part of the computed top 200 variable features from the in vivo data
+#this is done to ensure meaningful genes are used for the label transfer and it is not driven by e.g. lowly expressed genes
+integrator_rds <- integrator_rds[rowData(integrator_rds)$ENSEMBL %in% marker_genes_in_vivo,]
+
+#rename the genes of the in vitro data to the ENSEMBL counterparts
+row.names(integrator_rds) <- rowData(integrator_rds)$ENSEMBL
+
+#convert the sce object back into a seurat object
+integrator_rds <- as.Seurat(integrator_rds, counts = "counts", data = "logcounts")
+
+#identify transferanchors as described in https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds.anchors <- FindTransferAnchors(reference = in_vivo, query = integrator_rds, dims = 1:40,
+    reference.reduction = "pca", normalization.method = "SCT")
+
+set.seed(1234)
+#redo the UMAP reductino of the in vivo data, because return.model needs to be TRUE for the MapQuery
+in_vivo <- RunUMAP(in_vivo, dims = 1:30, n.neighbors = 30, return.model = T)
+
+
+#use MapQuery to perform the label transfer as according to https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds <- MapQuery(anchorset = integrator_rds.anchors, reference = in_vivo, query = integrator_rds,
+    refdata = list(celltype = "SCT_snn_res.0.4"), reference.reduction = "pca", reduction.model = "umap", query.dims = 1000)
+
+
+#alter the output column with predicted cell types for any label transfer with a prediction score less than 0.6
+integrator_rds$celltype <- ifelse(integrator_rds$predicted.celltype.score > 0.6, integrator_rds$predicted.celltype, "Unassigned")
+
+#provide the matching colour palette
+library(scales)
+my_color_palette <- hue_pal()(length(levels(as.factor(in_vivo@meta.data$SCT_snn_res.0.4))))
+my_color_palette <- c(my_color_palette[1], my_color_palette[5],my_color_palette[7], my_color_palette[12])
+
+#plot the UMAP of the in vivo data and the in vitro data projected onto the reference UMAP
+p1 <- DimPlot(in_vivo, reduction = "umap", group.by = "SCT_snn_res.0.4", label = F, label.size = 3,
+    repel = TRUE) + ggtitle("Reference annotations") + xlim(-20,20) + ylim(-20,20) & NoAxes()
+p2 <- DimPlot(integrator_rds, reduction = "ref.umap", group.by = "celltype", label = F,
+    label.size = 3, repel = TRUE) + ggtitle("Query transferred labels")  + xlim(-20,20) + ylim(-20,20) & NoAxes() #, cols = my_color_palette
+p1 + p2
+
+#write a table with how big a percentage of the in vitro data is mapped to different clusters of the reference
+table(integrator_rds@meta.data$celltype)/length(integrator_rds@meta.data$celltype)*100
+
+#make a data from of the seurat object meta data to plot a sankey plot
+df <- integrator_rds@meta.data %>% 
+  ggsankey::make_long(CMO_maxID, celltype)
+
+#plot a sankey plot - colours were changed in illustrator to match clustering
+ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = node,
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size=2, fill = "white") +
+  theme_sankey(base_size = 16) + NoLegend() +
+  scale_x_discrete(labels=c(
+    'CMO_maxID' = 'In vitro cells',
+    'celltype' = 'In vivo cells'
+    ))  + labs(x = "")
+
+
+# Extract UMAP embeddings
+in_vivo_umap <- Embeddings(in_vivo, reduction = "umap") %>% as.data.frame()
+in_vivo_umap$source <- "in_vivo"
+in_vivo_umap$group <- in_vivo@meta.data$SCT_snn_res.0.4
+
+in_vitro_umap <- Embeddings(integrator_rds, reduction = "ref.umap") %>% as.data.frame()
+in_vitro_umap$source <- "in_vitro"
+in_vitro_umap$group <- integrator_rds$celltype  # <- Replace with actual column
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2), color = "grey80", size = 0.5) +
+  geom_point(data = in_vitro_umap, aes(x = refUMAP_1, y = refUMAP_2, color = group), size = 0.7) +
+  scale_color_manual(values = my_color_palette) +
+  theme_void() +
+  theme(legend.position = "right") & NoLegend()
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2, color = group), size = 0.5) +
+  scale_color_manual(values = hue_pal()(length(levels(as.factor(in_vivo@meta.data$SCT_snn_res.0.4))))) +
+  theme_void() +
+  theme(legend.position = "right")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+_integrating in vitro data with in vivo data_
+```{r}
+require("AnnotationDbi")
+require("org.Mm.eg.db")
+require("TimeSeriesExperiment")
+require(ggsankey)
+
+#back up the seurat rds in case the process does not work out
+integrator_rds <- adata_ms
+
+#Read in the full (nonIR) data set from the in vivo experiment
+in_vivo <- readRDS(file = "scRNA-seq_2023/Christensen_et_al_2024/data/rds/nonIR_all_NEPs.rds")
+
+#calculate top 200 variable features across that data set
+#marker_genes_in_vivo <- VariableFeatures(in_vivo, nfeatures = 200)
+#alternatively the genes used to annotate can be used
+marker_genes_in_vivo <- c("Hopx", "Gdf10", "Ascl1", "Ptf1a", "Barhl1", "Atoh1", "Rbfox3", "Pax2", "Tubb3", "Slc6a11", "Barhl1", "Atoh1", "Foxj1", "Otx2", "Vtn", "Dcn", "Olig2", "Gpr17", "Pdgfra", "Ly68", "Cx3cr1")
+
+#because the in vitro data has gene symbols instead of ENSEMBL IDs we transform the RDS to a single cell experiment object
+#to rename the genes to be compatible with the in vivo genes
+integrator_rds <- as.SingleCellExperiment(integrator_rds, assay = "SCT")
+
+#use mapIds and the org.Mm.eg.db to make a dictionary with gene symbols and ENSEMBL IDs
+gene_names <- mapIds(org.Mm.eg.db, keys=rownames(integrator_rds), keytype="SYMBOL", columns="ENSEMBL",column="ENSEMBL")
+
+#add the ENSEMBL IDs of the gene names as rowData of the sce object
+rowData(integrator_rds)$ENSEMBL <- gene_names
+#add the gene symbols of the gene names as rowData of the sce object
+rowData(integrator_rds)$SYMBOL <- rownames(integrator_rds)
+
+#remove the ones where no ENSEMBL ID could be found (e.g. NAs)
+integrator_rds <- integrator_rds[! is.na(rowData(integrator_rds)$ENSEMBL),]
+
+#make the gene list unique
+integrator_rds <- integrator_rds[isUnique(rowData(integrator_rds)$ENSEMBL),]
+
+#subset only the genes which are part of the computed top 200 variable features from the in vivo data
+#this is done to ensure meaningful genes are used for the label transfer and it is not driven by e.g. lowly expressed genes
+#integrator_rds <- integrator_rds[rowData(integrator_rds)$ENSEMBL %in% marker_genes_in_vivo,]
+integrator_rds <- integrator_rds[rowData(integrator_rds)$SYMBOL %in% marker_genes_in_vivo,]
+
+#rename the genes of the in vitro data to the ENSEMBL counterparts
+row.names(integrator_rds) <- rowData(integrator_rds)$ENSEMBL
+
+#convert the sce object back into a seurat object
+integrator_rds <- as.Seurat(integrator_rds, counts = "counts", data = "logcounts")
+
+#identify transferanchors as described in https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds.anchors <- FindTransferAnchors(reference = in_vivo, query = integrator_rds, dims = 1:40,
+    reference.reduction = "pca", normalization.method = "SCT")
+
+set.seed(1234)
+#redo the UMAP reductino of the in vivo data, because return.model needs to be TRUE for the MapQuery
+in_vivo <- RunUMAP(in_vivo, dims = 1:30, n.neighbors = 30, return.model = T)
+
+
+#use MapQuery to perform the label transfer as according to https://satijalab.org/seurat/articles/integration_mapping
+#integrator_rds <- MapQuery(anchorset = integrator_rds.anchors, reference = in_vivo, query = integrator_rds,
+#    refdata = list(celltype = "nonIR_annotations"), reference.reduction = "pca", reduction.model = "umap", query.dims = 1000)
+integrator_rds <- MapQuery(anchorset = integrator_rds.anchors, reference = in_vivo, query = integrator_rds,
+    refdata = list(celltype = "SCT_snn_res.0.4"), reference.reduction = "pca", reduction.model = "umap", query.dims = 1000)
+
+
+#alter the output column with predicted cell types for any label transfer with a prediction score less than 0.6
+integrator_rds$celltype <- ifelse(integrator_rds$predicted.celltype.score > 0.6, integrator_rds$predicted.celltype, "Unassigned")
+
+#provide the matching colour palette
+library(scales)
+my_color_palette <- hue_pal()(length(levels(as.factor(in_vivo@meta.data$SCT_snn_res.0.4))))
+my_color_palette <- c(my_color_palette[1:2], my_color_palette[5:6], my_color_palette[12])
+
+#plot the UMAP of the in vivo data and the in vitro data projected onto the reference UMAP
+p1 <- DimPlot(in_vivo, reduction = "umap", group.by = "SCT_snn_res.0.4", label = F, label.size = 3,
+    repel = TRUE) + ggtitle("Reference annotations") + xlim(-20,20) + ylim(-20,20) & NoAxes()
+p2 <- DimPlot(integrator_rds, reduction = "ref.umap", group.by = "celltype", label = F,
+    label.size = 3, repel = TRUE, cols = my_color_palette) + ggtitle("Query transferred labels")  + xlim(-20,20) + ylim(-20,20) & NoAxes()
+p1 + p2
+
+#write a table with how big a percentage of the in vitro data is mapped to different clusters of the reference
+table(integrator_rds@meta.data$celltype)/length(integrator_rds@meta.data$celltype)*100
+
+#make a data from of the seurat object meta data to plot a sankey plot
+df <- integrator_rds@meta.data %>% 
+  ggsankey::make_long(CMO_maxID, celltype)
+
+#plot a sankey plot - colours were changed in illustrator to match clustering
+ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = node,
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size=2, fill = "white") +
+  theme_sankey(base_size = 16) + NoLegend() +
+  scale_x_discrete(labels=c(
+    'CMO_maxID' = 'In vitro cells',
+    'celltype' = 'In vivo cells'
+    ))  + labs(x = "")
+
+
+# Extract UMAP embeddings
+in_vivo_umap <- Embeddings(in_vivo, reduction = "umap") %>% as.data.frame()
+in_vivo_umap$source <- "in_vivo"
+in_vivo_umap$group <- in_vivo@meta.data$SCT_snn_res.0.4
+
+in_vitro_umap <- Embeddings(integrator_rds, reduction = "ref.umap") %>% as.data.frame()
+in_vitro_umap$source <- "in_vitro"
+in_vitro_umap$group <- integrator_rds$celltype  # <- Replace with actual column
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2), color = "grey80", size = 0.5) +
+  geom_point(data = in_vitro_umap, aes(x = refUMAP_1, y = refUMAP_2, color = group), size = 0.7) +
+  scale_color_manual(values = my_color_palette) +
+  theme_void() +
+  theme(legend.position = "right")
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2, color = group), size = 0.5) +
+  scale_color_manual(values = hue_pal()(length(levels(as.factor(in_vivo@meta.data$SCT_snn_res.0.4))))) +
+  theme_void() +
+  theme(legend.position = "right")
+```

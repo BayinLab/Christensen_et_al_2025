@@ -1,0 +1,614 @@
+---
+title: "Untitled"
+output: html_document
+date: '2025-04-28'
+---
+
+This is a script written by Jens Bager Christensen (jbc53@cam.ac.uk) to evaluate our primary human NEP cultures using scRNA-seq. 
+
+Packages are loaded
+```{r}
+library(Seurat)
+library(ggplot2)
+library(tidyverse)
+#library(reticulate)
+#library(leiden)
+```
+
+Functions are defined
+```{r}
+#set seed for consistency
+set.seed(1234)
+
+#Defining a function, which clusters a RDS in a range of resolutions, and calculates both the silhouette score and the negative silhouette proportion to determine which resolution is optimal
+clusteringKit <- function(name, assay, dim, res.range, reduction){
+  DefaultAssay(name) <- assay
+  #using FindNeighbors (Seurat), a KNN based clustering algorithm, to compute a SNN graph, which then can be used to cluster the cells w. their neighbors
+  name <- FindNeighbors(name, dims=1:dim, reduction=reduction)
+  for (i in res.range){
+    #FindClusters is used to cluster the aforementioned SNN graph by optimising the modularity function. This is carried out for all resolutions in the range of interest.
+    name <- FindClusters(name, resolution=i)
+  }
+DefaultAssay(name) <- assay
+  dist.matrix <- dist(x = Embeddings(object = name[[reduction]])[, 1:dim])
+ clusters <- paste0(assay,"_snn_res.", res.range)
+  getSil <- function(clr) {
+    clr <- name@meta.data[[clr]]
+    sil <- cluster::silhouette(x = as.numeric(x = as.factor(x = clr)), dist = dist.matrix)
+    sil_value <- sil
+    return(sil_value)
+  }
+  
+  sls <- lapply(clusters, getSil) #mc.cores = 1)
+  sls_median <- sapply(sls, function(x) median(x[,3])) %>% setNames(., res.range)
+  sls_neg_prop <- sapply(sls, function(x) sum(x[,3]<0)/length(x[,3])) %>% setNames(., res.range)
+  p_list <- lapply(res.range, function(res){
+    #Idents(name) = name@meta.data[paste0(assay, "_snn_res.",res)]
+    DimPlot(name, reduction = "umap", label = TRUE, group.by = paste0(assay, "_snn_res.",res), pt.size =0.3, raster=F)
+  })
+  return(list(name=name, sls_median=sls_median, sls_neg_prop=sls_neg_prop, dimplots=p_list))
+}
+```
+
+Read in the output of CellRanger aligned to GRCh38 and create a RDS object out of this. 
+Classify cells based on the multiplex assay, which contains expression of the 12 used CMOs.
+Thereafter, remove CMO311 and CMO312 because these samples were mouse NEPs.
+Following this vignette : https://www.10xgenomics.com/analysis-guides/tag-assignment-of-10x-Genomics-cellplex-data-using-seurats-htodemux-function
+```{r}
+#read in the output from 'cellranger multi' performed using CellRanger 8.0.1. Aligning only to GRCh38
+data <- Seurat::Read10X("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/primary_human_NEPs_GRCh38/outs/multi/count/raw_feature_bc_matrix/")
+
+#Add the CellPlex as a CMO assay
+adata = CreateSeuratObject(counts = data$`Gene Expression`)
+adata[['CMO']] = CreateAssayObject(counts = data$`Multiplexing Capture`)
+
+#identify cells with confident sample called based on cellranger. 
+library(data.table)
+cells <- fread("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/primary_human_NEPs_GRCh38/outs/multi/multiplexing_analysis/assignment_confidence_table.csv")
+
+#remove cells assigned either Multiplet or Unassigned
+cells <- cells %>% filter(Assignment != "Multiplet" & Assignment != "Unassigned")
+
+#extract only barcodes called with confident sample call
+adata <- subset(adata, cells = cells$Barcode)
+
+#remove cell without CMO counts
+DefaultAssay(adata)<-"CMO"
+adata <-  subset(x = adata, subset = nCount_CMO > 0)
+
+#Normalize the CMO data and run the HTODemux function. Read more https://satijalab.org/seurat/archive/v3.1/hashing_vignette.html
+adata <- NormalizeData(adata, assay = "CMO", normalization.method = "CLR")
+adata <- HTODemux(adata, assay = "CMO", positive.quantile = 0.99)
+
+#print out the amount of negative, doublets and singlets
+print(table(adata$CMO_classification.global))
+
+#Check the expression levels of CMO ID
+#The true positive cells should be well distanced from the other CMO IDs 
+RidgePlot(adata, assay = "CMO", features = rownames(adata[["CMO"]])[1:12], ncol = 6)
+
+#include only CMO301-CMO310 because these are human samples. Thus, doublets are also discarded here
+Idents(adata) <- "hash.ID"
+adata_hu <- subset(adata, idents = c("CMO301", "CMO302", "CMO303", "CMO304", "CMO305",
+                                  "CMO306", "CMO307", "CMO308", "CMO309", "CMO310"))
+
+#add the BRC and HDBR number and GSW to the meta data
+adata_hu@meta.data <- adata_hu@meta.data %>%
+  transform(sample = case_when(
+    hash.ID == "CMO301" ~ "BRC_2584 (9w)",
+    hash.ID == "CMO302" ~ "BRC_2583 (9w_4d)",
+    hash.ID == "CMO303" ~ "BRC_2591 (10w_5d)",
+    hash.ID == "CMO304" ~ "BRC_2593 (12w)",
+    hash.ID == "CMO305" ~ "HDBR_18265 (12w)",
+    hash.ID == "CMO306" ~ "HDBR_18294 (12w)",
+    hash.ID == "CMO307" ~ "HDBR_18267 (13w)",
+    hash.ID == "CMO308" ~ "HDBR_18285 (13w)",
+    hash.ID == "CMO309" ~ "HDBR_18290 (15w)",
+    hash.ID == "CMO310" ~ "HDBR_18275 (17w)",
+    ))
+
+#add the a joint time meta data variable
+adata_hu@meta.data <- adata_hu@meta.data %>%
+  transform(GSW = case_when(
+    hash.ID == "CMO301" ~ "9w",
+    hash.ID == "CMO302" ~ "9w",
+    hash.ID == "CMO303" ~ "10w",
+    hash.ID == "CMO304" ~ "12w",
+    hash.ID == "CMO305" ~ "12w",
+    hash.ID == "CMO306" ~ "12w",
+    hash.ID == "CMO307" ~ "13w",
+    hash.ID == "CMO308" ~ "13w",
+    hash.ID == "CMO309" ~ "15w",
+    hash.ID == "CMO310" ~ "17w",
+    ))
+
+#add the a sex meta data variable based on c("DDX3Y", "KDM5D", "RPS4Y1") expression
+adata_hu@meta.data <- adata_hu@meta.data %>%
+  transform(sex = case_when(
+    sample == "BRC_2584 (9w)" ~ "XX",
+    sample == "BRC_2583 (9w_4d)" ~ "XX",
+    sample == "BRC_2591 (10w_5d)" ~ "XY",
+    sample == "BRC_2593 (12w)" ~ "XY",
+    sample == "HDBR_18265 (12w)" ~ "XX",
+    sample == "HDBR_18294 (12w)" ~ "XX",
+    sample == "HDBR_18267 (13w)" ~ "XY",
+    sample == "HDBR_18285 (13w)" ~ "XX",
+    sample == "HDBR_18290 (15w)" ~ "XY",
+    sample == "HDBR_18275 (17w)" ~ "XY",
+    ))
+```
+
+_loading velocyte outputs and modifying cell ID to match the cell ranger output_
+```{r}
+library(SeuratWrappers)
+BRC_2583 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/BRC_2583/velocyte_BRC_2583_GRCh38.loom")
+BRC_2584 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/BRC_2584/velocyte_BRC_2584_GRCh38.loom")
+BRC_2591 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/BRC_2591/velocyte_BRC_2591_GRCh38.loom")
+BRC_2593 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/BRC_2593/velocyte_BRC_2593_GRCh38.loom")
+HDBR_18265 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/HDBR_18265/velocyte_HDBR_18265_GRCh38.loom")
+HDBR_18267 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/HDBR_18267/velocyte_HDBR_18267_GRCh38.loom")
+HDBR_18275 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/HDBR_18275/velocyte_HDBR_18275_GRCh38.loom")
+HDBR_18285 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/HDBR_18285/velocyte_HDBR_18285_GRCh38.loom")
+HDBR_18290 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/HDBR_18290/velocyte_HDBR_18290_GRCh38.loom")
+HDBR_18294 <- ReadVelocity("/mnt/beegfs6/home3/bayin/jbc53/CellRanger_CB/Velocyto_to_GRCh38/HDBR_18294/velocyte_HDBR_18294_GRCh38.loom")
+
+#change cell ID for all samples
+#BRC_2583
+colnames(BRC_2583$spliced) <- gsub(".*:","",colnames(BRC_2583$spliced))
+colnames(BRC_2583$spliced) <- gsub("x","-1",colnames(BRC_2583$spliced))
+colnames(BRC_2583$unspliced) <- gsub(".*:","",colnames(BRC_2583$unspliced))
+colnames(BRC_2583$unspliced) <- gsub("x","-1",colnames(BRC_2583$unspliced))
+#BRC_2584
+colnames(BRC_2584$spliced) <- gsub(".*:","",colnames(BRC_2584$spliced))
+colnames(BRC_2584$spliced) <- gsub("x","-1",colnames(BRC_2584$spliced))
+colnames(BRC_2584$unspliced) <- gsub(".*:","",colnames(BRC_2584$unspliced))
+colnames(BRC_2584$unspliced) <- gsub("x","-1",colnames(BRC_2584$unspliced))
+#BRC_2591
+colnames(BRC_2591$spliced) <- gsub(".*:","",colnames(BRC_2591$spliced))
+colnames(BRC_2591$spliced) <- gsub("x","-1",colnames(BRC_2591$spliced))
+colnames(BRC_2591$unspliced) <- gsub(".*:","",colnames(BRC_2591$unspliced))
+colnames(BRC_2591$unspliced) <- gsub("x","-1",colnames(BRC_2591$unspliced))
+#BRC_2593
+colnames(BRC_2593$spliced) <- gsub(".*:","",colnames(BRC_2593$spliced))
+colnames(BRC_2593$spliced) <- gsub("x","-1",colnames(BRC_2593$spliced))
+colnames(BRC_2593$unspliced) <- gsub(".*:","",colnames(BRC_2593$unspliced))
+colnames(BRC_2593$unspliced) <- gsub("x","-1",colnames(BRC_2593$unspliced))
+#HDBR_18265
+colnames(HDBR_18265$spliced) <- gsub(".*:","",colnames(HDBR_18265$spliced))
+colnames(HDBR_18265$spliced) <- gsub("x","-1",colnames(HDBR_18265$spliced))
+colnames(HDBR_18265$unspliced) <- gsub(".*:","",colnames(HDBR_18265$unspliced))
+colnames(HDBR_18265$unspliced) <- gsub("x","-1",colnames(HDBR_18265$unspliced))
+#HDBR_18267
+colnames(HDBR_18267$spliced) <- gsub(".*:","",colnames(HDBR_18267$spliced))
+colnames(HDBR_18267$spliced) <- gsub("x","-1",colnames(HDBR_18267$spliced))
+colnames(HDBR_18267$unspliced) <- gsub(".*:","",colnames(HDBR_18267$unspliced))
+colnames(HDBR_18267$unspliced) <- gsub("x","-1",colnames(HDBR_18267$unspliced))
+#HDBR_18275
+colnames(HDBR_18275$spliced) <- gsub(".*:","",colnames(HDBR_18275$spliced))
+colnames(HDBR_18275$spliced) <- gsub("x","-1",colnames(HDBR_18275$spliced))
+colnames(HDBR_18275$unspliced) <- gsub(".*:","",colnames(HDBR_18275$unspliced))
+colnames(HDBR_18275$unspliced) <- gsub("x","-1",colnames(HDBR_18275$unspliced))
+#HDBR_18285
+colnames(HDBR_18285$spliced) <- gsub(".*:","",colnames(HDBR_18285$spliced))
+colnames(HDBR_18285$spliced) <- gsub("x","-1",colnames(HDBR_18285$spliced))
+colnames(HDBR_18285$unspliced) <- gsub(".*:","",colnames(HDBR_18285$unspliced))
+colnames(HDBR_18285$unspliced) <- gsub("x","-1",colnames(HDBR_18285$unspliced))
+#HDBR_18290
+colnames(HDBR_18290$spliced) <- gsub(".*:","",colnames(HDBR_18290$spliced))
+colnames(HDBR_18290$spliced) <- gsub("x","-1",colnames(HDBR_18290$spliced))
+colnames(HDBR_18290$unspliced) <- gsub(".*:","",colnames(HDBR_18290$unspliced))
+colnames(HDBR_18290$unspliced) <- gsub("x","-1",colnames(HDBR_18290$unspliced))
+#HDBR_18294
+colnames(HDBR_18294$spliced) <- gsub(".*:","",colnames(HDBR_18294$spliced))
+colnames(HDBR_18294$spliced) <- gsub("x","-1",colnames(HDBR_18294$spliced))
+colnames(HDBR_18294$unspliced) <- gsub(".*:","",colnames(HDBR_18294$unspliced))
+colnames(HDBR_18294$unspliced) <- gsub("x","-1",colnames(HDBR_18294$unspliced))
+
+#remove duplicates
+#BRC_2583
+BRC_2583$spliced <- BRC_2583$spliced[!duplicated(rownames(BRC_2583$spliced)),]
+BRC_2583$unspliced <- BRC_2583$unspliced[!duplicated(rownames(BRC_2583$unspliced)),]
+#BRC_2584
+BRC_2584$spliced <- BRC_2584$spliced[!duplicated(rownames(BRC_2584$spliced)),]
+BRC_2584$unspliced <- BRC_2584$unspliced[!duplicated(rownames(BRC_2584$unspliced)),]
+#BRC_2591
+BRC_2591$spliced <- BRC_2591$spliced[!duplicated(rownames(BRC_2591$spliced)),]
+BRC_2591$unspliced <- BRC_2591$unspliced[!duplicated(rownames(BRC_2591$unspliced)),]
+#BRC_2593
+BRC_2593$spliced <- BRC_2593$spliced[!duplicated(rownames(BRC_2593$spliced)),]
+BRC_2593$unspliced <- BRC_2593$unspliced[!duplicated(rownames(BRC_2593$unspliced)),]
+#HDBR_18265
+HDBR_18265$spliced <- HDBR_18265$spliced[!duplicated(rownames(HDBR_18265$spliced)),]
+HDBR_18265$unspliced <- HDBR_18265$unspliced[!duplicated(rownames(HDBR_18265$unspliced)),]
+#HDBR_18267
+HDBR_18267$spliced <- HDBR_18267$spliced[!duplicated(rownames(HDBR_18267$spliced)),]
+HDBR_18267$unspliced <- HDBR_18267$unspliced[!duplicated(rownames(HDBR_18267$unspliced)),]
+#HDBR_18275
+HDBR_18275$spliced <- HDBR_18275$spliced[!duplicated(rownames(HDBR_18275$spliced)),]
+HDBR_18275$unspliced <- HDBR_18275$unspliced[!duplicated(rownames(HDBR_18275$unspliced)),]
+#HDBR_18285
+HDBR_18285$spliced <- HDBR_18285$spliced[!duplicated(rownames(HDBR_18285$spliced)),]
+HDBR_18285$unspliced <- HDBR_18285$unspliced[!duplicated(rownames(HDBR_18285$unspliced)),]
+#HDBR_18290
+HDBR_18290$spliced <- HDBR_18290$spliced[!duplicated(rownames(HDBR_18290$spliced)),]
+HDBR_18290$unspliced <- HDBR_18290$unspliced[!duplicated(rownames(HDBR_18290$unspliced)),]
+#HDBR_18294
+HDBR_18294$spliced <- HDBR_18294$spliced[!duplicated(rownames(HDBR_18294$spliced)),]
+HDBR_18294$unspliced <- HDBR_18294$unspliced[!duplicated(rownames(HDBR_18294$unspliced)),]
+```
+
+_for further analysis include only cells that have both reads from the cellranger and the velocyte output_
+```{r}
+#create a surrogate dgCMatrix object
+loom_data <- BRC_2583
+
+#change the surrogate dgCMatrix with the compined data from the 10 human samples
+loom_data$spliced <- cbind(BRC_2583$spliced, BRC_2584$spliced, BRC_2591$spliced, BRC_2593$spliced, HDBR_18265$spliced, HDBR_18267$spliced, HDBR_18275$spliced, HDBR_18285$spliced, HDBR_18290$spliced, HDBR_18294$spliced)
+loom_data$unspliced <- cbind(BRC_2583$unspliced, BRC_2584$unspliced, BRC_2591$unspliced, BRC_2593$unspliced, HDBR_18265$unspliced, HDBR_18267$unspliced, HDBR_18275$unspliced, HDBR_18285$unspliced, HDBR_18290$unspliced, HDBR_18294$unspliced)
+
+#make it a v3 seurat object to avoid an error
+options(Seurat.object.assay.version = 'v3')
+
+#create a seurat object with the spliced count matrix as an assay
+vel <- Seurat::CreateSeuratObject(counts = loom_data$spliced,
+                          assay = "spliced",
+                          min.cells = 0,
+                          min.features = 0,
+                          names.field = 2,
+                          names.delim = "\\-")
+
+#add the unspliced count matrix as an assay to the RDS object
+vel[["unspliced"]] <- SeuratObject::CreateAssayObject(counts = loom_data$unspliced)
+
+#called cells will not be exactly matching, because one RDS is made from the output of cellranger, the other from the output of velocyte
+#evaluate the amount of cells lost
+paste0("The velocyte processed RDS object contains ", length(colnames(vel)), " cells")
+paste0("Of these ", length(which(is.element(colnames(vel), colnames(adata_hu)))), " are in the human data")
+
+#keep only cells in the velocity RDS object, that is also present in the human data
+vel <- vel[, colnames(adata_hu)]
+
+paste0("The cellranger processed RDS object contains ", length(colnames(adata_hu)), " cells")
+paste0("Of these ", length(which(is.element(colnames(adata_hu), colnames(vel)))), " are also in the subsetted velocyte processed RDS")
+
+#similarly, keep only cells in the human data RDS that is also in the velocity RDS
+adata_hu <- adata_hu[, colnames(vel)]
+
+#extract the assay data from the velocyte processed object - both the spliced and unspliced assay
+unspliced.data <- GetAssayData(object =  vel[['unspliced']], slot = 'counts')
+spliced.data <- GetAssayData(object =  vel[['spliced']], slot = 'counts')
+
+#add the spliced and unspliced assays to the human RDS
+adata_hu[["unspliced"]] <- CreateAssayObject(data = unspliced.data )
+adata_hu[["spliced"]] <- CreateAssayObject(data = spliced.data )
+```
+
+_perform initial QC of cells_
+
+```{r}
+#change assay to RNA
+adata_hu@active.assay <- "RNA"
+
+# The [[ operator can add columns to object metadata. This is a great place to stash QC stats
+adata_hu[["percent.mt"]] <- PercentageFeatureSet(adata_hu, pattern = "^MT-")
+
+# Visualize QC metrics as a violin plot
+VlnPlot(adata_hu, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "sample", ncol = 3, alpha = 0.05)
+
+#remove outliers beased on amount of features detected and too high mitochondrial reads
+adata_hu <- subset(adata_hu, subset = nFeature_RNA > 200 & nFeature_RNA < 7500 & percent.mt < 5)
+
+#run sctransform, normalising features, counts and percent mitochondrial reads
+options(future.globals.maxSize = 8000 * 1024^2)
+adata_hu <- SCTransform(adata_hu, vars.to.regress = c("nFeature_RNA", "nCount_RNA", "percent.mt"), verbose = FALSE)
+
+#perform dimension reduction using PCA and UMAP to visualise the data 
+adata_hu <- RunPCA(adata_hu, verbose = FALSE)
+adata_hu <- RunUMAP(adata_hu, dims = 1:30, verbose = FALSE, return.model = T)
+
+#visualise the data on a DimPlot
+DimPlot(adata_hu, group.by = "sample") & NoAxes()
+
+#perform cell cycle scoring and regress out the difference between S and G2M
+adata_hu <- CellCycleScoring(adata_hu, s.features = cc.genes$s.genes, g2m.features = cc.genes$g2m.genes)
+
+#visualise the phase on a DimPlot
+DimPlot(adata_hu, group.by = "Phase")
+
+#regress out the difference between G2M and S using sctransform
+adata_hu$CC.Difference <- adata_hu$S.Score - adata_hu$G2M.Score
+adata_hu <- SCTransform(adata_hu, vars.to.regress = c("CC.Difference"))
+
+#redo the dimension reduction
+adata_hu <- RunPCA(adata_hu, verbose = FALSE)
+adata_hu <- RunUMAP(adata_hu, dims = 1:30, verbose = FALSE, return.model = T)
+
+#visualise the Dimplot with metadata variables of interest
+DimPlot(adata_hu, group.by = "sample") & NoAxes()
+DimPlot(adata_hu, group.by = "Phase") & NoAxes()
+DimPlot(adata_hu, group.by = "GSW") & NoAxes()
+DimPlot(adata_hu, group.by = "sex") & NoAxes()
+```
+
+_Perform clustering and cluster analysis to annotate the clusters_
+```{r}
+#try to cluster using a range of resolutions to identifying a meaningful resolution parameter
+adata_hu <- clusteringKit(adata_hu, assay="SCT", dim=30, res.range=seq(0.1, 3, 0.1), reduction="pca")
+
+
+#plot to find the higest silhouette score w. low negative silhouette proportion
+plot(adata_hu$sls_median~seq(0.1,3,0.1), type = "l", ylab = "Silhouette score") & plot(adata_hu$sls_neg_prop~seq(0.1,3,0.1), type = "l", ylab = "Negative silhouette proportion score")
+#inspect the different tested resolutions to identify the optimal value
+#a resolution of 0.3 seems to be fitting, not overclustering.
+
+#redefine the seurat object
+adata_hu <- adata_hu$name
+
+#Plot with the identified resolution and compare to the previous annotations
+DimPlot(adata_hu, label = T, label.box = T, repel = T, group.by = "SCT_snn_res.0.3") + ggtitle("Human cells clustered with a resolution of 0.3") & NoLegend() & NoAxes()
+
+#look at expression of genes on Y chromosome ("DDX3Y", "RPS4Y1", "UTY") or on X chromosome, but only expressed in females (XIST)
+VlnPlot(adata_hu, features = c("DDX3Y", "RPS4Y1", "UTY", "XIST"), group.by = "sample", ncol = 4)
+
+#write out a RDS
+saveRDS(adata_hu, "/mnt/beegfs7/home3/bayin/jbc53/scRNA-seq_2023/Christensen_et_al_2024/data/rds/primary_human_NEPs.rds")
+```
+
+_understanding initial clustering_
+```{r}
+#calculate marker genes for the clusters by setting the assay to RNA and the idents to the clustering computed with the optimal resolution.
+DefaultAssay(adata_hu) <- 'SCT'
+Idents(adata_hu) <- "SCT_snn_res.0.3"
+adata_hu <- PrepSCTFindMarkers(adata_hu, assay = "SCT", verbose = TRUE)
+adata_hu_markers <- FindAllMarkers(adata_hu, only.pos = TRUE, min.pct = 0.10, logfc.threshold = 0.25, assay = "SCT")
+
+#write out the marker genes
+write.csv(adata_hu_markers, "Hs_in_vitro/Hs_in_vitro_marker_genes.csv")
+
+#cluster 6 & 8 have low nCount_RNA and nFeature_RNA. Possibly damaged cells.
+VlnPlot(adata_hu, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"))
+
+DimPlot(adata_hu, group.by = "SCT_snn_res.0.3", label = T) & NoAxes()
+DimPlot(adata_hu, group.by = "sample") & NoAxes()
+DotPlot(adata_hu, features = c("COL11A1", "FGF13" ,"PDGFRA", "COL1A1", "PDGFRB", "SOX2", "NES",
+                               "GDF10", "GFAP", "HOPX", "ASCL1", "AQP4", "SLC1A2", "CENPF", "TOP2A"), group.by = "SCT_snn_res.0.3")
+
+DotPlot(adata_hu, features = c("COL11A1" ,"DCN" ,"COL1A1", "PDGFRA", "SOX2", "NES", "GDF10", "GFAP", "HOPX", "ASCL1", "DLL1", "AQP4", "SLC1A2", "MKI67", "TOP2A"), group.by = "SCT_snn_res.0.3")
+
+adata_hu_markers %>% filter(gene == "COL11A1")
+adata_hu_markers %>% filter(cluster == 7)
+FeaturePlot(adata_hu, "SOX2")
+#0 COL11A1 / FGF13 / DCN (mesenchymal cells)
+#1 COL1A1 / DCN  (mesenchymal cells) PDGFRA/PDGFRB
+#2 SOX2 / NES / GFAP / S100B (glial?)
+#3 ASCL1 / DLL1 / DLL3 / SOX2 / HOPX / MKI67(early progenitor)
+#4 AQP4 / SLC1A2 / SOX2 / NES (astrocytes)
+#5 MKI67 / TOP2A / ASCL1 / NES / SOX2 (proliferating NEPs)
+#6 low quality
+#7 COL1A1 / COL11A1 / MKI67 / TOP2A (proliferating mesenchymal cells)
+#8 low quality
+
+#save RDS
+#saveRDS(adata_hu, "scRNA-seq_2023/Christensen_et_al_2024/data/rds/all_primary_human_NEPs_velocyte.rds")
+
+```
+
+
+
+_integrating our progenitor clusters from primary NEP cultures with the Sepp et al (PMID: 38029793) atlas_ 
+The data has already been filtered, normalised, and 3x clustered (all features, gene features only, and TE only) as according to the README.
+```{r}
+#read in the data
+sepp <- readRDS("../../../../shared/sharing_dir/snRNAseq_newborn_17_20_wpc_PMID_38029793/snRNAseq_newborn_17_20_wpc_PMID_38029793.Rds")
+
+#filter out newborn data. 
+Idents(sepp) <- sepp@meta.data$orig.ident
+sepp <- subset(sepp, idents = c("17_wpc", "20_wpc"))
+
+#assay back to RNA
+sepp@active.assay <- "RNA"
+
+#remove TE features
+#extract the count matrix
+counts <- sepp[["RNA"]]$counts
+#identify the ones that are TEs. Select the ones that are not.
+non_TE_index <- grep("^SoloTE", rownames(counts), invert = T)
+#subset the count matrix
+counts <- counts[non_TE_index,]
+#make a subset of only the normal feature genes
+sepp <- subset(sepp, features = rownames(counts))
+
+#normalise data
+sepp <- NormalizeData(sepp)
+
+#perform CC scoring
+s.genes <- cc.genes$s.genes
+g2m.genes <- cc.genes$g2m.genes
+sepp <- JoinLayers(sepp, overwrite = TRUE) #https://github.com/satijalab/seurat/issues/8304
+sepp <- CellCycleScoring(sepp, s.features = s.genes, g2m.features = g2m.genes)
+
+#add a column the difference between the S.score and G2M.Score to regress out cell cycle noise while still maintaining the difference between proliferative and non-proliferative cells at later stages
+sepp@meta.data$CC.Difference <- sepp@meta.data$S.Score - sepp@meta.data$G2M.Score
+
+#perform normalisation
+sepp <- SCTransform(sepp, vars.to.regress = c("percent.mt", "CC.Difference", "nFeature_RNA", "nCount_RNA"))
+
+#perform dimension reduction
+sepp <- RunPCA(sepp)
+sepp <- RunUMAP(sepp, dims = 1:30, reduction = "pca", return.model = TRUE, seed.use = 1234)
+
+#look at QC values
+VlnPlot(sepp, c("nCount_RNA", "nFeature_RNA", "percent.mt"), group.by = "orig.ident", pt.size = 1, alpha = 0.05)
+FeaturePlot(sepp, c("nCount_RNA", "nFeature_RNA", "percent.mt")) & NoAxes()
+DimPlot(sepp, group.by = c("orig.ident", "Phase")) & NoAxes()
+
+# Filter based on nFeature_RNA and nCount_RNA 
+sepp <- subset(sepp, subset = nFeature_RNA > 500 & nCount_RNA > 500)
+VlnPlot(sepp, c("percent.mt", "CC.Difference", "nFeature_RNA", "nCount_RNA"))
+
+#perform normalisation and dimension reduction again 
+sepp <- SCTransform(sepp, vars.to.regress = c("percent.mt", "CC.Difference", "nFeature_RNA", "nCount_RNA"), conserve.memory = T)
+sepp <- RunPCA(sepp)
+sepp <- RunUMAP(sepp, dims = 1:30, reduction = "pca", return.model = TRUE, seed.use = 1234)
+
+#look at QC values again
+VlnPlot(sepp, c("nCount_RNA", "nFeature_RNA", "percent.mt"), group.by = "orig.ident", pt.size = 1, alpha = 0.05)
+FeaturePlot(sepp, c("nCount_RNA", "nFeature_RNA", "percent.mt")) & NoAxes()
+DimPlot(sepp, group.by = c("orig.ident", "Phase")) & NoAxes()
+
+#perform clustering
+sepp <- clusteringKit(sepp, assay="SCT", dim=20, res.range=seq(0.1, 2, 0.1), reduction="pca")
+
+#plot to find the highest silhouette score w. low negative silhouette proportion
+plot(sepp$sls_median~seq(0.1,2,0.1), type = "l", ylab = "Silhouette score") & plot(sepp$sls_neg_prop~seq(0.1,2,0.1), type = "l", ylab = "Negative silhouette proportion score")
+#resolution of 0.3 is chosen based on biological meaningfulness
+
+#rename the Seurat objects
+sepp <- sepp$name
+
+#Plot with the new resolutions
+DimPlot(sepp, label = T, label.box = T, repel = T, group.by = "SCT_snn_res.0.3") + ggtitle("Sepp et al., pcw 17+20") & NoLegend() & NoAxes()
+DimPlot(sepp, label = T, label.box = T, repel = T, group.by = "orig.ident") + ggtitle("Sepp et al., pcw 17+20") & NoLegend() & NoAxes()
+
+#perform cluster analysis to identify marker genes in each cluster
+DefaultAssay(sepp) <- 'SCT'
+Idents(sepp) <- "SCT_snn_res.0.3"
+sepp <- PrepSCTFindMarkers(sepp, assay = "SCT", verbose = TRUE)
+sepp_markers <- FindAllMarkers(sepp, only.pos = TRUE, min.pct = 0.10, logfc.threshold = 0.25, assay = "SCT")
+
+sepp_markers %>% dplyr::filter(cluster == 6) %>% transform(ratio = pct.1/pct.2) %>% arrange(desc(ratio))
+sepp_markers %>% filter(gene == "SLC32A1")
+FeaturePlot(sepp, features = c("GDF10", "GFAP", "NES"))
+
+
+#0 VZ-derived progenitors (SOX2 / NES)
+#1 GCPs (BARHL1 / RBFOX3 / PAX6)
+#2 VZ-derived progenitors (SOX2 / NES)
+#3 Early INs (ASCL1 / PAX2 / LHX5 / PTF1A)
+#4 UBCs (EOMES / LMX1A)
+#5 INs (GAD1 / GAD2)
+#6 GCPs (BARHL1 / RBFOX3 / PAX6)
+#7 PCs (SKOR2 / CALB1)
+#8 Oligodendrocyte / OPCs (OLIG1 / OLIG2 / PDGFRA)
+#9 Erythrocytes (HBB)
+#10 microglia (SPP1 / CSF3R)
+
+
+DotPlot(sepp, c("SOX2", "NES", "BARHL1", "RBFOX3", "PAX6", "ASCL1", "PAX2", "LHX5", "EOMES", "LMX1A", "GAD1", "GAD2", "SKOR2", "CALB1", "OLIG1", "OLIG2", "PDGFRA", "HBB", "CSF3R"), group.by = "SCT_snn_res.0.3")
+```
+
+_integration_
+```{r}
+#set the indent to the clustering with optimal resolution
+Idents(adata_hu) <- "SCT_snn_res.0.3"
+
+#the progenitor clusters of our in vitro cultures are subsetted for integration
+integrator_rds_Hs <- subset(adata_hu, idents = c(2, 3, 4, 5))
+
+#calculate top 200 variable features across that data set
+marker_genes_sepp <- VariableFeatures(sepp, nfeatures = 200)
+                  
+#Subset the Sepp data to contain the top 200 variable features
+sepp_subset <- sepp
+DefaultAssay(sepp_subset) <- "SCT"
+sepp_subset[["SCT"]] <- subset(sepp_subset[["SCT"]], features = marker_genes_sepp)
+
+
+#identify transferanchors as described in https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds_Hs.anchors <- FindTransferAnchors(reference = sepp_subset, query = integrator_rds_Hs, dims = 1:40,
+    reference.reduction = "pca", normalization.method = "SCT")
+
+
+#use MapQuery to perform the label transfer as according to https://satijalab.org/seurat/articles/integration_mapping
+integrator_rds_Hs <- MapQuery(anchorset = integrator_rds_Hs.anchors, reference = sepp_subset, query = integrator_rds_Hs,
+    refdata = list(celltype = "SCT_snn_res.0.3"), reference.reduction = "pca", reduction.model = "umap", query.dims = 1000)
+
+
+#alter the output column with predicted cell types for any label transfer with a prediction score less than 0.6
+integrator_rds_Hs$celltype <- ifelse(integrator_rds_Hs$predicted.celltype.score > 0.6, integrator_rds_Hs$predicted.celltype, "Unassigned")
+
+#plot the UMAP of the in vivo data and the in vitro data projected onto the reference UMAP
+p1 <- DimPlot(sepp, reduction = "umap", group.by = "SCT_snn_res.0.3", label = F, label.size = 3,
+    repel = TRUE) + ggtitle("Reference annotations") & NoAxes()
+p2 <- DimPlot(integrator_rds_Hs, reduction = "ref.umap", group.by = "celltype", label = F,
+    label.size = 3, repel = TRUE) + ggtitle("Query transferred labels")  & NoAxes() #, cols = my_color_palette
+p1 + p2
+
+#write a table with how big a percentage of the in vitro data is mapped to different clusters of the reference
+table(integrator_rds_Hs@meta.data$celltype)/length(integrator_rds_Hs@meta.data$celltype)*100
+
+#make a data from of the seurat object meta data to plot a sankey plot
+df <- integrator_rds_Hs@meta.data %>% 
+  ggsankey::make_long(sample, celltype)
+
+df$node <- factor(df$node,levels = c("BRC_2584 (9w)","BRC_2583 (9w_4d)","BRC_2591 (10w_5d)", "BRC_2593 (12w)", "HDBR_18265 (12w)", "HDBR_18294 (12w)", "HDBR_18267 (13w)", "HDBR_18285 (13w)", "HDBR_18290 (15w)", "HDBR_18275 (17w)",
+                                     "0", "1", "2", "3", "5", "6", "9", "10", "Unassigned"))
+
+#plot a sankey plot - colours were changed in illustrator to match clustering
+sankey_bs <- ggplot(df, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = node,
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size=2, fill = "white") +
+  theme_sankey(base_size = 16) + NoLegend() +
+  scale_x_discrete(labels=c(
+    'sample' = 'In vitro cells',
+    'celltype' = 'In vivo cells'
+    ))  + labs(x = "")
+
+#make a data from of the seurat object meta data to plot a sankey plot
+df_by_cluster <- integrator_rds_Hs@meta.data %>% 
+  ggsankey::make_long(SCT_snn_res.0.3, celltype)
+
+
+#plot a sankey plot - colours were changed in illustrator to match clustering
+sankey_bc <- ggplot(df_by_cluster, aes(x = x, 
+               next_x = next_x, 
+               node = node, 
+               next_node = next_node,
+               fill = node,
+               label = node)) +
+  geom_sankey(flow.alpha = 0.5, node.color = 1) +
+  geom_sankey_label(size=2, fill = "white") +
+  theme_sankey(base_size = 16) + NoLegend() +
+  scale_x_discrete(labels=c(
+    'SCT_snn_res.0.3' = 'In vitro cells',
+    'celltype' = 'In vivo cells'
+    ))  + labs(x = "")
+
+#visualise
+sankey_bs + sankey_bc
+
+# Extract UMAP embeddings
+in_vivo_umap <- Embeddings(sepp, reduction = "umap") %>% as.data.frame()
+in_vivo_umap$source <- "in_vivo"
+in_vivo_umap$group <- sepp@meta.data$SCT_snn_res.0.4
+
+in_vitro_umap <- Embeddings(integrator_rds_Hs, reduction = "ref.umap") %>% as.data.frame()
+in_vitro_umap$source <- "in_vitro"
+in_vitro_umap$group <- integrator_rds_Hs$celltype  # <- Replace with actual column
+
+#provide the matching colour palette
+library(scales)
+my_color_palette <- hue_pal()(length(levels(as.factor(sepp@meta.data$SCT_snn_res.0.4))))
+my_color_palette <- c(my_color_palette[1], my_color_palette[2],my_color_palette[3], my_color_palette[4], my_color_palette[6], my_color_palette[7], my_color_palette[10], my_color_palette[11], my_color_palette[13])
+
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2), color = "grey80", size = 0.5) +
+  geom_point(data = in_vitro_umap, aes(x = refUMAP_1, y = refUMAP_2, color = group), size = 0.7) +
+  scale_color_manual(values = my_color_palette) +
+  theme_void() +
+  theme(legend.position = "right") & NoLegend()
+
+# Plot
+ggplot() +
+  geom_point(data = in_vivo_umap, aes(x = umap_1, y = umap_2, color = group), size = 0.5) +
+  scale_color_manual(values = hue_pal()(length(levels(as.factor(sepp@meta.data$SCT_snn_res.0.4))))) +
+  theme_void() +
+  theme(legend.position = "right")
+```
