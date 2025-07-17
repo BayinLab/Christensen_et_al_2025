@@ -1,0 +1,293 @@
+---
+title: "Untitled"
+output: html_document
+date: '2025-07-14'
+---
+
+This is a script by Jens Bager Christensen (jbc53@cam.ac.uk) to interrograte the overlap of ASCL1-Dam and FOXO1-Dam peaks during _in vitro_ NEP differentiation.
+
+Overlapping peaks day 2 ± 1kb
+
+```{r}
+ASCL1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D2_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO_D2.5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#use biomaRt to add gene symbols instead of ensembl IDs
+library(biomaRt)
+
+
+mart <- useMart(biomart="ENSEMBL_MART_ENSEMBL", 
+                dataset = "mmusculus_gene_ensembl", 
+                host = "https://www.ensembl.org/", verbose = F)
+
+
+#annotate
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature < 1000]
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature > -1000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d2<- ASCL1_d2[ASCL1_d2$distancetoFeature < 1000]
+ASCL1_d2 <- ASCL1_d2[ASCL1_d2$distancetoFeature > -1000]
+
+
+ol <- findOverlapsOfPeaks(ASCL1_d2, FOXO1_d2, minoverlap = 1)
+
+
+makeVennDiagram(ol, totalTest = 20000,
+                        fill = c("#EEB4B3", "#91C163"),
+                        col = c("#ED3B3B", "#6CBF13"),
+                        cat.col = c("#ED3B3B", "#6CBF13"))
+
+#calculated the percentage of peaks that are shared
+596 / (915 + 596 + 488) * 100
+```
+
+Overlapping peaks day 6 ± 1kb
+
+```{r}
+ASCL1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#use biomaRt to add gene symbols instead of ensembl IDs
+library(biomaRt)
+
+
+mart <- useMart(biomart="ENSEMBL_MART_ENSEMBL", 
+                dataset = "mmusculus_gene_ensembl", 
+                host = "https://www.ensembl.org/", verbose = F)
+
+
+#annotate
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#remove peaks that are more than 1000 bases from a gene TSS
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature < 1000]
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature > -1000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d6<- ASCL1_d6[ASCL1_d6$distancetoFeature < 1000]
+ASCL1_d6 <- ASCL1_d6[ASCL1_d6$distancetoFeature > -1000]
+
+
+ol <- findOverlapsOfPeaks(ASCL1_d6, FOXO1_d6, minoverlap = 1)
+
+
+makeVennDiagram(ol, totalTest = 20000,
+                        fill = c("#EEB4B3", "#91C163"),
+                        col = c("#ED3B3B", "#6CBF13"),
+                        cat.col = c("#ED3B3B", "#6CBF13"))
+
+#calculated the percentage of peaks that are shared
+52 / (401 + 52 + 165) * 100
+```
+
+Overlapping peaks day 2 ± 2kb
+
+```{r}
+ASCL1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D2_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO_D2.5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#use biomaRt to add gene symbols instead of ensembl IDs
+library(biomaRt)
+
+
+mart <- useMart(biomart="ENSEMBL_MART_ENSEMBL", 
+                dataset = "mmusculus_gene_ensembl", 
+                host = "https://www.ensembl.org/", verbose = F)
+
+
+#annotate
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#remove peaks that are more than 2000 bases from a gene TSS
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature < 2000]
+FOXO1_d2 <- FOXO1_d2[FOXO1_d2$distancetoFeature > -2000]
+#remove peaks that are more than 2000 bases from a gene TSS
+ASCL1_d2<- ASCL1_d2[ASCL1_d2$distancetoFeature < 2000]
+ASCL1_d2 <- ASCL1_d2[ASCL1_d2$distancetoFeature > -2000]
+
+#make unique for duplicated ranges
+FOXO1_d2 <- unique(FOXO1_d2)
+ASCL1_d2 <- unique(ASCL1_d2)
+
+#find overlap
+ol <- findOverlapsOfPeaks(ASCL1_d2, FOXO1_d2, minoverlap = 1)
+
+
+makeVennDiagram(ol, totalTest = 20000,
+                        fill = c("#EEB4B3", "#91C163"),
+                        col = c("#ED3B3B", "#6CBF13"),
+                        cat.col = c("#ED3B3B", "#6CBF13"))
+
+#calculated the percentage of peaks that are shared
+863 / (1250 + 863 + 653) * 100
+```
+
+Overlapping peaks day 6 ± 2kb
+
+```{r}
+ASCL1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#use biomaRt to add gene symbols instead of ensembl IDs
+library(biomaRt)
+
+
+mart <- useMart(biomart="ENSEMBL_MART_ENSEMBL", 
+                dataset = "mmusculus_gene_ensembl", 
+                host = "https://www.ensembl.org/", verbose = F)
+
+
+#annotate
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+#remove peaks that are more than 2000 bases from a gene TSS
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature < 2000]
+FOXO1_d6 <- FOXO1_d6[FOXO1_d6$distancetoFeature > -2000]
+#remove peaks that are more than 1000 bases from a gene TSS
+ASCL1_d6<- ASCL1_d6[ASCL1_d6$distancetoFeature < 2000]
+ASCL1_d6 <- ASCL1_d6[ASCL1_d6$distancetoFeature > -2000]
+
+#make unique for duplicated ranges
+FOXO1_d6 <- unique(FOXO1_d6)
+ASCL1_d6 <- unique(ASCL1_d6)
+
+#find overlap
+ol <- findOverlapsOfPeaks(ASCL1_d6, FOXO1_d6, minoverlap = 1)
+
+
+makeVennDiagram(ol, totalTest = 20000,
+                        fill = c("#EEB4B3", "#91C163"),
+                        col = c("#ED3B3B", "#6CBF13"),
+                        cat.col = c("#ED3B3B", "#6CBF13"))
+
+#calculated the percentage of peaks that are shared
+79 / (557 + 79 + 273) * 100
+```
+
+Overlapping peaks day 2 (all peaks)
+
+```{r}
+ASCL1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D2_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d2 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO_D2.5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#use biomaRt to add gene symbols instead of ensembl IDs
+library(biomaRt)
+
+
+mart <- useMart(biomart="ENSEMBL_MART_ENSEMBL", 
+                dataset = "mmusculus_gene_ensembl", 
+                host = "https://www.ensembl.org/", verbose = F)
+
+
+#annotate
+FOXO1_d2 <- annotatePeakInBatch(FOXO1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d2 <- annotatePeakInBatch(ASCL1_d2, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+
+#make unique for duplicated ranges
+FOXO1_d2 <- unique(FOXO1_d2)
+ASCL1_d2 <- unique(ASCL1_d2)
+
+#find overlap
+ol <- findOverlapsOfPeaks(ASCL1_d2, FOXO1_d2, minoverlap = 1)
+
+
+makeVennDiagram(ol, totalTest = 20000,
+                        fill = c("#EEB4B3", "#91C163"),
+                        col = c("#ED3B3B", "#6CBF13"),
+                        cat.col = c("#ED3B3B", "#6CBF13"))
+
+#calculated the percentage of peaks that are shared
+5557 / (5656 + 5557 + 3467) * 100
+```
+
+Overlapping peaks day 6 (all peaks)
+
+```{r}
+ASCL1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/ASCL1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T, )
+FOXO1_d6 <- toGRanges("/mnt/beegfs6/home3/bayin/jbc53/DamID/ASCL1-FOXO1_DamID/significant_peaks/repro_peaks/FOXO1_D6_5.reproPeak_nohead.bed.txt", format = "BED", header = T)
+
+#load the UCSC mm10 genome (the same the sequencing was mapped to)
+library(EnsDb.Mmusculus.v79)
+
+EnsDb.Mmusculus.v79.genes <- genes(EnsDb.Mmusculus.v79)
+
+#use biomaRt to add gene symbols instead of ensembl IDs
+library(biomaRt)
+
+
+mart <- useMart(biomart="ENSEMBL_MART_ENSEMBL", 
+                dataset = "mmusculus_gene_ensembl", 
+                host = "https://www.ensembl.org/", verbose = F)
+
+
+#annotate
+FOXO1_d6 <- annotatePeakInBatch(FOXO1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+ASCL1_d6 <- annotatePeakInBatch(ASCL1_d6, 
+                                         AnnotationData = EnsDb.Mmusculus.v79.genes)
+
+
+#make unique for duplicated ranges
+FOXO1_d6 <- unique(FOXO1_d6)
+ASCL1_d6 <- unique(ASCL1_d6)
+
+#find overlap
+ol <- findOverlapsOfPeaks(ASCL1_d6, FOXO1_d6, minoverlap = 1)
+
+
+makeVennDiagram(ol, totalTest = 20000,
+                        fill = c("#EEB4B3", "#91C163"),
+                        col = c("#ED3B3B", "#6CBF13"),
+                        cat.col = c("#ED3B3B", "#6CBF13"))
+
+#calculated the percentage of peaks that are shared
+805 / (3401 + 805 + 1725) * 100
+```
